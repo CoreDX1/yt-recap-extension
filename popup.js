@@ -2,6 +2,7 @@ const periodSelect = document.getElementById("periodSelect");
 const sourceSelect = document.getElementById("sourceSelect");
 const totalTimeEl = document.getElementById("totalTime");
 const totalPlaysEl = document.getElementById("totalPlays");
+const totalLoopsEl = document.getElementById("totalLoops");
 const topArtistEl = document.getElementById("topArtist");
 const topListEl = document.getElementById("topList");
 const emptyMsgEl = document.getElementById("emptyMsg");
@@ -33,6 +34,7 @@ async function renderRecap() {
   if (filtered.length === 0) {
     totalTimeEl.textContent = "0 min";
     totalPlaysEl.textContent = "0";
+    totalLoopsEl.textContent = "0";
     topArtistEl.textContent = "—";
     topListEl.replaceChildren();
     emptyMsgEl.hidden = false;
@@ -42,26 +44,28 @@ async function renderRecap() {
   emptyMsgEl.hidden = true;
 
   let totalSeconds = 0;
+  let totalLoops = 0;
   const tracksMap = new Map();
   const artistsMap = new Map();
 
   for (const item of filtered) {
     totalSeconds += item.seconds;
+    if (item.isLoop) totalLoops += 1;
 
-    // Agrupar por canción/video
     const current = tracksMap.get(item.trackKey) || {
       title: item.title,
       artist: item.artist,
       artwork: item.artwork,
       plays: 0,
+      loops: 0,
       seconds: 0,
     };
     current.plays += 1;
+    if (item.isLoop) current.loops += 1;
     current.seconds += item.seconds;
     if (!current.artwork && item.artwork) current.artwork = item.artwork;
     tracksMap.set(item.trackKey, current);
 
-    // Agrupar por artista/canal
     const artistKey = item.artist || "Desconocido";
     const artistStats = artistsMap.get(artistKey) || { plays: 0, seconds: 0 };
     artistStats.plays += 1;
@@ -69,7 +73,6 @@ async function renderRecap() {
     artistsMap.set(artistKey, artistStats);
   }
 
-  // Ordenar Top Artistas por tiempo escuchado
   const topArtists = [...artistsMap.entries()].sort(
     (a, b) => b[1].seconds - a[1].seconds,
   );
@@ -79,9 +82,8 @@ async function renderRecap() {
 
   totalTimeEl.textContent = formatDuration(totalSeconds);
   totalPlaysEl.textContent = String(filtered.length);
-  topArtistEl.textContent = topArtists[0]
-    ? `${topArtists[0][0]} (${formatDuration(topArtists[0][1].seconds)})`
-    : "—";
+  totalLoopsEl.textContent = `🔁 ${totalLoops}`;
+  topArtistEl.textContent = topArtists[0] ? topArtists[0][0] : "—";
 
   const nodes = topTracks.map((track, idx) => {
     const li = document.createElement("li");
@@ -111,7 +113,11 @@ async function renderRecap() {
 
     const stats = document.createElement("div");
     stats.className = "track-stats";
-    stats.textContent = `${track.plays}x · ${Math.max(1, Math.round(track.seconds / 60))}m`;
+    const mins = Math.max(1, Math.round(track.seconds / 60));
+    stats.textContent =
+      track.loops > 0
+        ? `${track.plays}x (🔁${track.loops}) · ${mins}m`
+        : `${track.plays}x · ${mins}m`;
 
     li.append(rank, img, meta, stats);
     return li;
