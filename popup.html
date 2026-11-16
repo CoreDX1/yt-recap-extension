@@ -78,6 +78,7 @@
                 </button>
                 <button class="tab-btn" data-tab="recent">Reciente</button>
                 <button class="tab-btn" data-tab="activity">Horarios</button>
+                <button class="tab-btn" data-tab="calendar">Calendario</button>
             </nav>
         </header>
 
@@ -145,6 +146,58 @@
             <section class="activity-box">
                 <h2>Top 5 Artistas / Canales</h2>
                 <ul id="topArtistsList" class="top-list compact"></ul>
+            </section>
+        </main>
+
+        <!-- TAB 4: CALENDARIO Y TOP SEMANAL -->
+        <main id="tab-calendar" class="tab-panel" hidden>
+            <section class="calendar-box">
+                <div class="cal-header">
+                    <span id="calMonthLabel" class="cal-month-label">—</span>
+                    <div class="cal-nav">
+                        <button
+                            id="calTodayBtn"
+                            class="cal-today-btn"
+                            title="Ir a hoy"
+                        >
+                            Hoy
+                        </button>
+                        <button
+                            id="calPrevBtn"
+                            class="cal-arrow-btn"
+                            title="Mes anterior"
+                        >
+                            ‹
+                        </button>
+                        <button
+                            id="calNextBtn"
+                            class="cal-arrow-btn"
+                            title="Mes siguiente"
+                        >
+                            ›
+                        </button>
+                    </div>
+                </div>
+
+                <div class="cal-weekdays">
+                    <span>D</span><span>L</span><span>M</span><span>X</span
+                    ><span>J</span><span>V</span><span>S</span>
+                </div>
+
+                <div id="calGrid" class="cal-grid"></div>
+            </section>
+
+            <section class="cal-section">
+                <h2 id="calDayTitle">Actividad del día</h2>
+                <ul id="calDayList" class="top-list compact"></ul>
+                <p id="calDayEmpty" class="empty-msg small" hidden>
+                    No se registró actividad en esta fecha.
+                </p>
+            </section>
+
+            <section class="cal-section">
+                <h2 id="calWeeksTitle">Top por semana</h2>
+                <div id="calWeeksList" class="weeks-list"></div>
             </section>
         </main>
 
