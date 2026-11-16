@@ -11,14 +11,36 @@
                 <h1>Tu Recap</h1>
                 <div class="header-actions">
                     <button
+                        id="expandBtn"
+                        class="pill-btn"
+                        title="Abrir en pestaña completa"
+                    >
+                        ⛶
+                    </button>
+                    <button
+                        id="importBtn"
+                        class="pill-btn"
+                        title="Importar Google Takeout o backup JSON"
+                    >
+                        Importar
+                    </button>
+                    <input
+                        id="importInput"
+                        type="file"
+                        accept=".json,application/json"
+                        hidden
+                    />
+                    <button
                         id="exportBtn"
                         class="pill-btn"
-                        title="Exportar JSON"
+                        title="Exportar backup JSON"
                     >
                         Exportar
                     </button>
                 </div>
             </div>
+
+            <div id="importStatus" class="import-status" hidden></div>
 
             <!-- Tarjeta EN VIVO -->
             <div id="nowPlayingCard" class="now-playing">
@@ -34,6 +56,9 @@
                             >
                             <span id="npSourceBadge" class="badge source"
                                 >YouTube</span
+                            >
+                            <span id="npFormatBadge" class="badge format" hidden
+                                >Short</span
                             >
                             <span id="npLoopBadge" class="badge loop" hidden
                                 >🔁 Bucle</span
@@ -69,6 +94,9 @@
                     <option value="all">Todo (YT + Music)</option>
                     <option value="yt_music">Solo YT Music</option>
                     <option value="youtube">Solo YouTube</option>
+                    <option value="no_shorts">Excluir Shorts</option>
+                    <option value="short">Solo Shorts</option>
+                    <option value="live">Solo Directos</option>
                 </select>
             </div>
 
@@ -79,6 +107,7 @@
                 <button class="tab-btn" data-tab="recent">Reciente</button>
                 <button class="tab-btn" data-tab="activity">Horarios</button>
                 <button class="tab-btn" data-tab="calendar">Calendario</button>
+                <button class="tab-btn" data-tab="channels">Canales</button>
             </nav>
         </header>
 
@@ -112,7 +141,17 @@
             </section>
 
             <section class="top-section">
-                <h2>Top escuchado / visto</h2>
+                <div class="section-header">
+                    <h2>Top escuchado / visto</h2>
+                    <button
+                        id="makePlaylistBtn"
+                        class="mini-btn"
+                        hidden
+                        title="Abrir Top en una playlist instantánea"
+                    >
+                        ▶ Playlist
+                    </button>
+                </div>
                 <ul id="topList" class="top-list"></ul>
                 <p id="emptyMsg" class="empty-msg" hidden>
                     Todavía no hay datos en este período. Reproducí al menos 20
@@ -129,7 +168,7 @@
             </p>
         </main>
 
-        <!-- TAB 3: ACTIVIDAD / HORARIOS -->
+        <!-- TAB 3: HORARIOS Y DETALLES -->
         <main id="tab-activity" class="tab-panel" hidden>
             <section class="activity-box">
                 <h2>Actividad por hora del día (00h – 23h)</h2>
@@ -144,8 +183,23 @@
             </section>
 
             <section class="activity-box">
+                <h2>Formatos, origen y velocidad</h2>
+                <div id="breakdownStats" class="breakdown-grid"></div>
+            </section>
+
+            <section id="albumsBox" class="activity-box" hidden>
+                <h2>Top Álbumes (YT Music)</h2>
+                <ul id="topAlbumsList" class="top-list compact"></ul>
+            </section>
+
+            <section class="activity-box">
                 <h2>Top 5 Artistas / Canales</h2>
                 <ul id="topArtistsList" class="top-list compact"></ul>
+            </section>
+
+            <section id="skipsBox" class="activity-box" hidden>
+                <h2>Más salteadas (&lt; 20s)</h2>
+                <ul id="topSkipsList" class="top-list compact"></ul>
             </section>
         </main>
 
@@ -198,6 +252,42 @@
             <section class="cal-section">
                 <h2 id="calWeeksTitle">Top por semana</h2>
                 <div id="calWeeksList" class="weeks-list"></div>
+            </section>
+        </main>
+
+        <!-- TAB 5: CANALES -->
+        <main id="tab-channels" class="tab-panel" hidden>
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Canales únicos</span>
+                    <strong id="chUniqueCount">0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Visitas a canales</span>
+                    <strong id="chTotalVisits">0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Más visitado</span>
+                    <strong id="chTopName">—</strong>
+                </div>
+            </section>
+
+            <section class="cal-section">
+                <h2>Ranking de canales</h2>
+                <ul id="channelsTopList" class="top-list compact"></ul>
+                <p id="channelsEmpty" class="empty-msg small" hidden>
+                    Todavía no registraste visitas ni reproducciones de canales
+                    en este período.
+                </p>
+            </section>
+
+            <section class="cal-section">
+                <h2>Últimas visitas directas a canales</h2>
+                <ul id="channelsRecentList" class="top-list compact"></ul>
+                <p id="channelsRecentEmpty" class="empty-msg small" hidden>
+                    Entrá a la página de cualquier canal en YouTube para
+                    registrarlo aquí.
+                </p>
             </section>
         </main>
 

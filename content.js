@@ -10,6 +10,9 @@
   let saveQueue = Promise.resolve();
   let timerId = null;
 
+  let currentChannelVisit = null;
+  let pendingChannel = null;
+
   function isContextValid() {
     return Boolean(
       typeof chrome !== "undefined" &&
@@ -48,7 +51,44 @@
     const match = location.pathname.match(
       /^\/(?:shorts|live|embed)\/([^/?#]+)/,
     );
-    return match ? match[1] : "";
+    if (match) return match[1];
+    // Respaldo en YouTube Music cuando la URL no muestra ?v=
+    const playerLink = document.querySelector(
+      'a.ytp-title-link[href*="v="]',
+    )?.href;
+    if (playerLink) {
+      try {
+        return new URL(playerLink).searchParams.get("v") || "";
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  }
+
+  function detectContentType() {
+    if (location.pathname.startsWith("/shorts/")) return "short";
+    const liveBadge = document.querySelector(".ytp-live-badge");
+    const isLiveDom = Boolean(
+      liveBadge && liveBadge.offsetParent !== null && !liveBadge.disabled,
+    );
+    if (location.pathname.startsWith("/live/") || isLiveDom) return "live";
+    return isMusic ? "music" : "video";
+  }
+
+  function detectPlaybackContext() {
+    const listId = new URLSearchParams(location.search).get("list") || "";
+    if (!listId) return { context: "direct", playlistId: "" };
+    if (listId.startsWith("RD")) return { context: "mix", playlistId: listId };
+    return { context: "playlist", playlistId: listId };
+  }
+
+  function buildVideoUrl(videoId, contentType) {
+    if (!videoId) return location.href;
+    if (contentType === "short")
+      return `https://www.youtube.com/shorts/${videoId}`;
+    if (isMusic) return `https://music.youtube.com/watch?v=${videoId}`;
+    return `https://www.youtube.com/watch?v=${videoId}`;
   }
 
   function getActiveVideo() {
@@ -66,13 +106,18 @@
     if (document.querySelector("#movie_player.ad-showing")) return null;
 
     const videoId = extractVideoId();
+    const contentType = detectContentType();
+    const { context, playlistId } = detectPlaybackContext();
+
     const meta = navigator.mediaSession?.metadata;
     const metaTitle = meta?.title?.trim() || "";
     const metaArtist = meta?.artist?.trim() || "";
+    const album = meta?.album?.trim() || "";
     let artwork = meta?.artwork?.[meta.artwork.length - 1]?.src || "";
 
     let domTitle = "";
     let domArtist = "";
+    let channelUrl = "";
 
     if (isMusic) {
       domTitle =
@@ -84,6 +129,8 @@
           .querySelector("ytmusic-player-bar .byline")
           ?.textContent?.trim() || "";
       domArtist = byline.split("•")[0]?.trim() || "";
+      const artistLink = document.querySelector("ytmusic-player-bar .byline a");
+      if (artistLink?.href) channelUrl = artistLink.href;
     } else {
       domTitle =
         document
@@ -91,12 +138,11 @@
             "h1.ytd-watch-metadata, #title h1, ytd-reel-video-renderer[is-active] h2",
           )
           ?.textContent?.trim() || "";
-      domArtist =
-        document
-          .querySelector(
-            "ytd-watch-metadata #channel-name a, #upload-info #channel-name a, ytd-channel-name a, ytd-reel-video-renderer[is-active] #channel-name a",
-          )
-          ?.textContent?.trim() || "";
+      const channelEl = document.querySelector(
+        "ytd-watch-metadata #channel-name a, #upload-info #channel-name a, ytd-channel-name a, ytd-reel-video-renderer[is-active] #channel-name a",
+      );
+      domArtist = channelEl?.textContent?.trim() || "";
+      if (channelEl?.href) channelUrl = channelEl.href;
     }
 
     const docTitle = document.title
@@ -125,45 +171,274 @@
       ? `ytm::${title.toLowerCase()}::${artist.toLowerCase()}`
       : `yt::${videoId}::${title.toLowerCase()}`;
 
-    return { trackKey, title, artist, artwork, source };
+    return {
+      trackKey,
+      videoId,
+      videoUrl: buildVideoUrl(videoId, contentType),
+      title,
+      artist,
+      album,
+      artwork,
+      channelUrl,
+      contentType,
+      context,
+      playlistId,
+      source,
+    };
   }
 
-  function createSession(info, videoTime, duration, isLoop = false) {
+  // --- DETECCIÓN DE PÁGINAS DE CANAL ---
+  function getChannelBasePath() {
+    const match = location.pathname.match(
+      /^\/(@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)/i,
+    );
+    if (!match) return null;
+    if (isMusic && !match[1].toLowerCase().startsWith("channel/")) return null;
+    return `/${match[1]}`;
+  }
+
+  function findVisibleText(root, selectors) {
+    for (const sel of selectors) {
+      const els = [...root.querySelectorAll(sel)];
+      const visible = els.find(
+        (el) => !el.closest("[hidden]") && el.textContent?.trim(),
+      );
+      if (visible) return visible.textContent.replace(/\s+/g, " ").trim();
+    }
+    return "";
+  }
+
+  function findVisibleImg(root, selectors) {
+    for (const sel of selectors) {
+      const els = [...root.querySelectorAll(sel)];
+      const visible = els.find((el) => !el.closest("[hidden]") && el.src);
+      if (visible) return visible.src;
+    }
+    return "";
+  }
+
+  function getChannelPageInfo(basePath) {
+    const scope = isMusic
+      ? document.querySelector("ytmusic-browse-response") || document
+      : document.querySelector(
+          'ytd-browse[page-subtype="channels"]:not([hidden])',
+        ) || document;
+
+    const nameSelectors = isMusic
+      ? [
+          "ytmusic-immersive-header-renderer .title",
+          "ytmusic-visual-header-renderer .title",
+          "h1",
+        ]
+      : [
+          "yt-page-header-renderer h1",
+          "yt-dynamic-text-view-model h1",
+          "#channel-header #text",
+          "ytd-channel-name#channel-name #text",
+          "#channel-name #text",
+        ];
+
+    const avatarSelectors = isMusic
+      ? [
+          "ytmusic-immersive-header-renderer img",
+          "ytmusic-visual-header-renderer img",
+        ]
+      : [
+          "yt-page-header-renderer img",
+          "yt-avatar-shape img",
+          "#channel-header #avatar img",
+          "#channel-header img",
+        ];
+
+    const domName = findVisibleText(scope, nameSelectors);
+    const avatar = findVisibleImg(scope, avatarSelectors);
+    const handleFallback = basePath.startsWith("/@") ? basePath.slice(1) : "";
+
+    return {
+      domName,
+      name: domName || handleFallback || "Canal de YouTube",
+      avatar,
+      url: `${location.origin}${basePath}`,
+    };
+  }
+
+  function saveChannelVisit(visit, isUpdate = false) {
+    if (stopIfInvalid()) return;
+    enqueueStorage(async () => {
+      if (stopIfInvalid()) return;
+      const data = await chrome.storage.local.get({ channelVisits: [] });
+      const visits = Array.isArray(data.channelVisits)
+        ? data.channelVisits
+        : [];
+      const idx = visits.findIndex((v) => v.id === visit.id);
+      if (idx >= 0) {
+        visits[idx] = {
+          ...visits[idx],
+          name: visit.name,
+          avatar: visit.avatar,
+        };
+      } else if (!isUpdate) {
+        visits.push({
+          id: visit.id,
+          channelKey: visit.basePath.toLowerCase(),
+          name: visit.name,
+          avatar: visit.avatar,
+          url: visit.url,
+          source,
+          timestamp: visit.timestamp,
+        });
+      }
+      await chrome.storage.local.set({ channelVisits: visits });
+    });
+  }
+
+  function handleChannelTracking() {
+    const basePath = getChannelBasePath();
+    if (!basePath) {
+      currentChannelVisit = null;
+      pendingChannel = null;
+      return;
+    }
+
+    const normPath = basePath.toLowerCase();
+
+    if (currentChannelVisit && currentChannelVisit.normPath === normPath) {
+      if (currentChannelVisit.ticks < 6) {
+        currentChannelVisit.ticks += 1;
+        const info = getChannelPageInfo(basePath);
+        const changedName =
+          info.domName && info.domName !== currentChannelVisit.name;
+        const gainedAvatar = info.avatar && !currentChannelVisit.avatar;
+        if (changedName || gainedAvatar) {
+          if (info.domName) currentChannelVisit.name = info.domName;
+          if (info.avatar) currentChannelVisit.avatar = info.avatar;
+          saveChannelVisit(currentChannelVisit, true);
+        }
+      }
+      return;
+    }
+
+    if (!pendingChannel || pendingChannel.normPath !== normPath) {
+      pendingChannel = { normPath, basePath, ticks: 0 };
+    } else {
+      pendingChannel.ticks += 1;
+    }
+
+    const info = getChannelPageInfo(basePath);
+    if (!info.domName && pendingChannel.ticks < 2) return;
+
+    const visit = {
+      id: `ch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      normPath,
+      basePath,
+      name: info.name,
+      avatar: info.avatar,
+      url: info.url,
+      timestamp: Date.now(),
+      ticks: 0,
+    };
+
+    currentChannelVisit = visit;
+    pendingChannel = null;
+    saveChannelVisit(visit, false);
+  }
+
+  // --- SESIONES DE REPRODUCCIÓN Y SKIPS ---
+  function createSession(info, video, isLoop = false) {
+    const dur = Number.isFinite(video.duration)
+      ? Math.round(video.duration)
+      : 0;
     let minRequired = MIN_SECONDS_TO_COUNT;
     if (isLoop) {
       minRequired = MIN_SECONDS_ON_LOOP;
-    } else if (
-      Number.isFinite(duration) &&
-      duration > 0 &&
-      duration < MIN_SECONDS_TO_COUNT
-    ) {
-      minRequired = Math.max(5, Math.floor(duration * 0.8));
+    } else if (dur > 0 && dur < MIN_SECONDS_TO_COUNT) {
+      minRequired = Math.max(5, Math.floor(dur * 0.8));
     }
 
     return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       ...info,
+      duration: dur,
       seconds: 0,
+      mutedSeconds: 0,
+      rateSum: 0,
+      rateCount: 0,
       minRequired,
       isLoop,
-      maxTimeReached: videoTime || 0,
+      maxTimeReached: video.currentTime || 0,
       lastSavedSeconds: -10,
       startedAt: Date.now(),
     };
   }
 
-  function upsertSession(session, force = false) {
-    if (stopIfInvalid()) return;
-    if (!session || session.seconds < session.minRequired) return;
-    if (!force && session.seconds - session.lastSavedSeconds < 5) return;
+  function recordSkip(session) {
+    if (stopIfInvalid() || !session) return;
+    if (
+      session.isLoop ||
+      session.seconds < 2 ||
+      session.seconds >= session.minRequired
+    )
+      return;
 
-    const snapshot = {
-      id: session.id,
+    const skipEntry = {
+      id: `sk-${session.id}`,
       trackKey: session.trackKey,
+      videoId: session.videoId || "",
+      videoUrl: session.videoUrl || "",
       title: session.title,
       artist: session.artist,
       artwork: session.artwork,
       source: session.source,
+      contentType: session.contentType,
+      seconds: Math.round(session.seconds),
+      duration: session.duration || 0,
+      timestamp: session.startedAt,
+    };
+
+    enqueueStorage(async () => {
+      if (stopIfInvalid()) return;
+      const data = await chrome.storage.local.get({ skips: [] });
+      const skips = Array.isArray(data.skips) ? data.skips : [];
+      skips.push(skipEntry);
+      // Limitar a los últimos 1000 skips para mantener liviano el almacenamiento
+      if (skips.length > 1000) skips.splice(0, skips.length - 1000);
+      await chrome.storage.local.set({ skips });
+    });
+  }
+
+  function upsertSession(session, force = false) {
+    if (stopIfInvalid() || !session) return;
+    if (session.seconds < session.minRequired) return;
+    if (!force && session.seconds - session.lastSavedSeconds < 5) return;
+
+    const avgRate =
+      session.rateCount > 0
+        ? Number((session.rateSum / session.rateCount).toFixed(2))
+        : 1;
+    const mostlyMuted = session.mutedSeconds > session.seconds * 0.5;
+    const completionPct =
+      session.duration > 0
+        ? Math.min(100, Math.round((session.seconds / session.duration) * 100))
+        : null;
+
+    const snapshot = {
+      id: session.id,
+      trackKey: session.trackKey,
+      videoId: session.videoId || "",
+      videoUrl: session.videoUrl || "",
+      title: session.title,
+      artist: session.artist,
+      album: session.album || "",
+      artwork: session.artwork,
+      channelUrl: session.channelUrl || "",
+      source: session.source,
+      contentType: session.contentType || "video",
+      context: session.context || "direct",
+      playlistId: session.playlistId || "",
+      duration: session.duration || 0,
+      completionPct,
+      playbackRate: avgRate,
+      mostlyMuted,
       seconds: Math.round(session.seconds),
       isLoop: session.isLoop,
       timestamp: session.startedAt,
@@ -183,6 +458,15 @@
       }
       await chrome.storage.local.set({ history });
     });
+  }
+
+  function finalizeSession(session) {
+    if (!session) return;
+    if (session.seconds >= session.minRequired) {
+      upsertSession(session, true);
+    } else {
+      recordSkip(session);
+    }
   }
 
   async function publishNowPlaying(video, info) {
@@ -213,11 +497,17 @@
           tabInstanceId,
           title: info.title,
           artist: info.artist,
+          album: info.album || "",
           artwork: info.artwork,
+          videoUrl: info.videoUrl,
           source: info.source,
+          contentType: info.contentType,
+          context: info.context,
           currentTime: Math.floor(video.currentTime || 0),
           duration: Math.floor(dur),
           paused: isPaused,
+          muted: Boolean(video.muted || video.volume === 0),
+          playbackRate: Number((video.playbackRate || 1).toFixed(2)),
           loopActive: Boolean(video.loop),
           sessionSeconds: currentSession ? currentSession.seconds : 0,
           minRequired: currentSession
@@ -241,9 +531,10 @@
   timerId = setInterval(() => {
     if (stopIfInvalid()) return;
 
+    handleChannelTracking();
+
     const video = getActiveVideo();
     const info = getTrackInfo();
-
     if (!video || !info) return;
 
     if (video.paused || video.ended || video.readyState < 2) {
@@ -252,21 +543,13 @@
     }
 
     if (currentSession && currentSession.trackKey !== info.trackKey) {
-      upsertSession(currentSession, true);
+      finalizeSession(currentSession);
       currentSession = null;
     }
 
     if (!currentSession) {
-      currentSession = createSession(
-        info,
-        video.currentTime,
-        video.duration,
-        false,
-      );
+      currentSession = createSession(info, video, false);
     } else {
-      // Autocorregir título/artista/portada si YouTube tardó 1s en actualizar el DOM tras cambiar de video
-      if (info.title && currentSession.title !== info.title)
-        currentSession.title = info.title;
       if (
         info.artist &&
         info.artist !== "YouTube" &&
@@ -274,10 +557,21 @@
       ) {
         currentSession.artist = info.artist;
       }
+      if (info.album && !currentSession.album)
+        currentSession.album = info.album;
+      if (info.channelUrl && !currentSession.channelUrl)
+        currentSession.channelUrl = info.channelUrl;
       if (info.artwork && !currentSession.artwork)
         currentSession.artwork = info.artwork;
+      if (info.videoId && !currentSession.videoId) {
+        currentSession.videoId = info.videoId;
+        currentSession.videoUrl = info.videoUrl;
+      }
 
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
+      if (dur > 0 && !currentSession.duration)
+        currentSession.duration = Math.round(dur);
+
       const nearEnd =
         dur > 0 && currentSession.maxTimeReached >= Math.max(5, dur - 8);
       const restarted =
@@ -290,15 +584,14 @@
           currentSession.seconds >= currentSession.minRequired)
       ) {
         const isActualLoop = Boolean(video.loop || nearEnd);
-        upsertSession(currentSession, true);
-        currentSession = createSession(
-          info,
-          video.currentTime,
-          dur,
-          isActualLoop,
-        );
+        finalizeSession(currentSession);
+        currentSession = createSession(info, video, isActualLoop);
       } else {
         currentSession.seconds += 1;
+        if (video.muted || video.volume === 0) currentSession.mutedSeconds += 1;
+        currentSession.rateSum += video.playbackRate || 1;
+        currentSession.rateCount += 1;
+
         if (video.currentTime > currentSession.maxTimeReached) {
           currentSession.maxTimeReached = video.currentTime;
         }
@@ -320,7 +613,7 @@
 
   window.addEventListener("pagehide", async () => {
     if (currentSession) {
-      upsertSession(currentSession, true);
+      finalizeSession(currentSession);
       currentSession = null;
     }
     if (isContextValid()) {
@@ -332,7 +625,7 @@
           await chrome.storage.local.remove("nowPlaying");
         }
       } catch {
-        // Ignorar si el contexto ya cerró
+        // Ignorar
       }
     }
   });
