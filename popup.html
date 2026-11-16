@@ -9,8 +9,54 @@
         <header>
             <div class="title-row">
                 <h1>Tu Recap</h1>
-                <button id="exportBtn" title="Exportar JSON">Exportar</button>
+                <div class="header-actions">
+                    <button
+                        id="exportBtn"
+                        class="pill-btn"
+                        title="Exportar JSON"
+                    >
+                        Exportar
+                    </button>
+                </div>
             </div>
+
+            <!-- Tarjeta EN VIVO -->
+            <div id="nowPlayingCard" class="now-playing">
+                <div class="np-empty" id="npEmpty">
+                    <span class="dot offline"></span> Nada reproduciéndose ahora
+                </div>
+                <div class="np-content" id="npContent" hidden>
+                    <img id="npThumb" class="np-thumb" alt="" />
+                    <div class="np-info">
+                        <div class="np-top-line">
+                            <span id="npStatusBadge" class="badge live"
+                                >● En vivo</span
+                            >
+                            <span id="npSourceBadge" class="badge source"
+                                >YouTube</span
+                            >
+                            <span id="npLoopBadge" class="badge loop" hidden
+                                >🔁 Bucle</span
+                            >
+                        </div>
+                        <div id="npTitle" class="np-title">—</div>
+                        <div id="npArtist" class="np-artist">—</div>
+                        <div class="np-progress-wrap">
+                            <div class="np-bar-bg">
+                                <div id="npBarFill" class="np-bar-fill"></div>
+                            </div>
+                            <div class="np-time-row">
+                                <span id="npTime">0:00 / 0:00</span>
+                                <span
+                                    id="npCountState"
+                                    class="np-count-state"
+                                ></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="filters">
                 <select id="periodSelect">
                     <option value="7">Últimos 7 días</option>
@@ -25,35 +71,82 @@
                     <option value="youtube">Solo YouTube</option>
                 </select>
             </div>
+
+            <nav class="tabs">
+                <button class="tab-btn active" data-tab="summary">
+                    Resumen
+                </button>
+                <button class="tab-btn" data-tab="recent">Reciente</button>
+                <button class="tab-btn" data-tab="activity">Horarios</button>
+            </nav>
         </header>
 
-        <section class="stats-grid">
-            <div class="stat-card">
-                <span class="stat-label">Tiempo total</span>
-                <strong id="totalTime">0 min</strong>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Reproducciones</span>
-                <strong id="totalPlays">0</strong>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Bucles detectados</span>
-                <strong id="totalLoops">0</strong>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Top Artista / Canal</span>
-                <strong id="topArtist">—</strong>
-            </div>
-        </section>
+        <!-- TAB 1: RESUMEN -->
+        <main id="tab-summary" class="tab-panel active">
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Tiempo total</span>
+                    <strong id="totalTime">0 min</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Reproducciones</span>
+                    <strong id="totalPlays">0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Bucles detectados</span>
+                    <strong id="totalLoops">🔁 0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Títulos únicos</span>
+                    <strong id="uniqueCount">0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Racha actual</span>
+                    <strong id="streakDays">0 días</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Hora pico</span>
+                    <strong id="peakHour">—</strong>
+                </div>
+            </section>
 
-        <section class="top-section">
-            <h2>Top escuchado / visto</h2>
-            <ul id="topList" class="top-list"></ul>
-            <p id="emptyMsg" class="empty-msg" hidden>
-                Todavía no hay datos en este período. Reproducí al menos 20
-                segundos de un tema o video.
+            <section class="top-section">
+                <h2>Top escuchado / visto</h2>
+                <ul id="topList" class="top-list"></ul>
+                <p id="emptyMsg" class="empty-msg" hidden>
+                    Todavía no hay datos en este período. Reproducí al menos 20
+                    segundos de un tema o video.
+                </p>
+            </section>
+        </main>
+
+        <!-- TAB 2: RECIENTE -->
+        <main id="tab-recent" class="tab-panel" hidden>
+            <ul id="recentList" class="top-list tall"></ul>
+            <p id="recentEmpty" class="empty-msg" hidden>
+                Sin reproducciones recientes.
             </p>
-        </section>
+        </main>
+
+        <!-- TAB 3: ACTIVIDAD / HORARIOS -->
+        <main id="tab-activity" class="tab-panel" hidden>
+            <section class="activity-box">
+                <h2>Actividad por hora del día (00h – 23h)</h2>
+                <div id="hoursChart" class="hours-chart"></div>
+                <div class="hours-labels">
+                    <span>00h</span>
+                    <span>06h</span>
+                    <span>12h</span>
+                    <span>18h</span>
+                    <span>23h</span>
+                </div>
+            </section>
+
+            <section class="activity-box">
+                <h2>Top 5 Artistas / Canales</h2>
+                <ul id="topArtistsList" class="top-list compact"></ul>
+            </section>
+        </main>
 
         <footer>
             <button id="clearBtn" class="danger-link">

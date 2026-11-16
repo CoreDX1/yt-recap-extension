@@ -3,12 +3,36 @@
   const MIN_SECONDS_ON_LOOP = 3;
   const isMusic = location.hostname === "music.youtube.com";
   const source = isMusic ? "yt_music" : "youtube";
+  const tabInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   let currentSession = null;
+  let lastPausedReported = null;
   let saveQueue = Promise.resolve();
+  let timerId = null;
+
+  function isContextValid() {
+    return Boolean(
+      typeof chrome !== "undefined" &&
+      chrome.runtime?.id &&
+      chrome.storage?.local,
+    );
+  }
+
+  function stopIfInvalid() {
+    if (!isContextValid()) {
+      if (timerId) clearInterval(timerId);
+      return true;
+    }
+    return false;
+  }
 
   function enqueueStorage(fn) {
+    if (stopIfInvalid()) return saveQueue;
     saveQueue = saveQueue.then(fn).catch((err) => {
+      if (String(err?.message || err).includes("context invalidated")) {
+        if (timerId) clearInterval(timerId);
+        return;
+      }
       console.error("[YT Recap] Error de almacenamiento:", err);
     });
     return saveQueue;
@@ -84,6 +108,7 @@
   }
 
   function upsertSession(session, force = false) {
+    if (stopIfInvalid()) return;
     if (!session || session.seconds < session.minRequired) return;
     if (!force && session.seconds - session.lastSavedSeconds < 5) return;
 
@@ -102,25 +127,81 @@
     session.lastSavedSeconds = session.seconds;
 
     enqueueStorage(async () => {
+      if (stopIfInvalid()) return;
       const data = await chrome.storage.local.get({ history: [] });
-      const idx = data.history.findIndex((item) => item.id === snapshot.id);
+      const history = Array.isArray(data.history) ? data.history : [];
+      const idx = history.findIndex((item) => item.id === snapshot.id);
       if (idx >= 0) {
-        data.history[idx] = snapshot;
+        history[idx] = snapshot;
       } else {
-        data.history.push(snapshot);
+        history.push(snapshot);
       }
-      await chrome.storage.local.set({ history: data.history });
+      await chrome.storage.local.set({ history });
     });
   }
 
-  setInterval(() => {
+  async function publishNowPlaying(video, info) {
+    if (stopIfInvalid() || !video || !info) return;
+
+    try {
+      const isPaused = Boolean(video.paused || video.ended);
+      if (isPaused) {
+        if (lastPausedReported === true) return;
+        const { nowPlaying } = await chrome.storage.local.get({
+          nowPlaying: null,
+        });
+        if (
+          nowPlaying &&
+          nowPlaying.tabInstanceId !== tabInstanceId &&
+          !nowPlaying.paused &&
+          Date.now() - nowPlaying.updatedAt < 3000
+        ) {
+          return;
+        }
+      }
+
+      lastPausedReported = isPaused;
+      const dur = Number.isFinite(video.duration) ? video.duration : 0;
+
+      await chrome.storage.local.set({
+        nowPlaying: {
+          tabInstanceId,
+          title: info.title,
+          artist: info.artist,
+          artwork: info.artwork,
+          source: info.source,
+          currentTime: Math.floor(video.currentTime || 0),
+          duration: Math.floor(dur),
+          paused: isPaused,
+          loopActive: Boolean(video.loop),
+          sessionSeconds: currentSession ? currentSession.seconds : 0,
+          minRequired: currentSession
+            ? currentSession.minRequired
+            : MIN_SECONDS_TO_COUNT,
+          isLoopSession: currentSession ? currentSession.isLoop : false,
+          updatedAt: Date.now(),
+        },
+      });
+    } catch (err) {
+      if (String(err?.message || err).includes("context invalidated")) {
+        if (timerId) clearInterval(timerId);
+      }
+    }
+  }
+
+  timerId = setInterval(() => {
+    if (stopIfInvalid()) return;
+
     const video = document.querySelector("video");
-    if (!video || video.paused || video.ended || video.readyState < 2) return;
-
     const info = getTrackInfo();
-    if (!info) return;
 
-    // Si cambió a otro video/canción
+    if (!video || !info) return;
+
+    if (video.paused || video.ended || video.readyState < 2) {
+      publishNowPlaying(video, info);
+      return;
+    }
+
     if (currentSession && currentSession.trackKey !== info.trackKey) {
       upsertSession(currentSession, true);
       currentSession = null;
@@ -133,46 +214,43 @@
         video.duration,
         false,
       );
-      return;
+    } else {
+      const dur = Number.isFinite(video.duration) ? video.duration : 0;
+      const nearEnd =
+        dur > 0 && currentSession.maxTimeReached >= Math.max(5, dur - 8);
+      const restarted =
+        currentSession.maxTimeReached > 8 && video.currentTime < 5;
+
+      if (
+        restarted &&
+        (video.loop ||
+          nearEnd ||
+          currentSession.seconds >= currentSession.minRequired)
+      ) {
+        const isActualLoop = Boolean(video.loop || nearEnd);
+        upsertSession(currentSession, true);
+        currentSession = createSession(
+          info,
+          video.currentTime,
+          dur,
+          isActualLoop,
+        );
+      } else {
+        currentSession.seconds += 1;
+        if (video.currentTime > currentSession.maxTimeReached) {
+          currentSession.maxTimeReached = video.currentTime;
+        }
+        if (!currentSession.artwork && info.artwork) {
+          currentSession.artwork = info.artwork;
+        }
+
+        const justUnlocked =
+          currentSession.seconds === currentSession.minRequired;
+        upsertSession(currentSession, justUnlocked);
+      }
     }
 
-    const dur = Number.isFinite(video.duration) ? video.duration : 0;
-    const nearEnd =
-      dur > 0 && currentSession.maxTimeReached >= Math.max(5, dur - 8);
-    const restarted =
-      currentSession.maxTimeReached > 8 && video.currentTime < 5;
-
-    // Si volvió al inicio después de haber avanzado o llegado al final
-    if (
-      restarted &&
-      (video.loop ||
-        nearEnd ||
-        currentSession.seconds >= currentSession.minRequired)
-    ) {
-      const isActualLoop = Boolean(video.loop || nearEnd);
-      upsertSession(currentSession, true);
-      currentSession = createSession(
-        info,
-        video.currentTime,
-        dur,
-        isActualLoop,
-      );
-      return;
-    }
-
-    currentSession.seconds += 1;
-    if (video.currentTime > currentSession.maxTimeReached) {
-      currentSession.maxTimeReached = video.currentTime;
-    }
-    if (!currentSession.artwork && info.artwork) {
-      currentSession.artwork = info.artwork;
-    }
-
-    // Si es un bucle y recién cumplió los 3s, lo guarda inmediatamente
-    const justUnlockedLoop =
-      currentSession.isLoop &&
-      currentSession.seconds === currentSession.minRequired;
-    upsertSession(currentSession, justUnlockedLoop);
+    publishNowPlaying(video, info);
   }, 1000);
 
   document.addEventListener("visibilitychange", () => {
@@ -181,10 +259,22 @@
     }
   });
 
-  window.addEventListener("pagehide", () => {
+  window.addEventListener("pagehide", async () => {
     if (currentSession) {
       upsertSession(currentSession, true);
       currentSession = null;
+    }
+    if (isContextValid()) {
+      try {
+        const { nowPlaying } = await chrome.storage.local.get({
+          nowPlaying: null,
+        });
+        if (nowPlaying?.tabInstanceId === tabInstanceId) {
+          await chrome.storage.local.remove("nowPlaying");
+        }
+      } catch {
+        // Ignorar si el contexto ya cerró
+      }
     }
   });
 })();
