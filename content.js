@@ -1,22 +1,32 @@
 (() => {
-  const MIN_SECONDS_TO_COUNT = 20;
-  const MIN_SECONDS_ON_LOOP = 3;
+  const CONFIG = {
+    MIN_SECONDS_TO_COUNT: 20,
+    MIN_SECONDS_ON_LOOP: 3,
+    SAVE_INTERVAL_SEC: 5,
+    TICK_MS: 1000,
+    MAX_SKIPS: 1000,
+    MAX_SEARCHES: 2000,
+  };
+
   const isMusic = location.hostname === "music.youtube.com";
   const source = isMusic ? "yt_music" : "youtube";
   const tabInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-  let currentSession = null;
-  let lastPausedReported = null;
+  const state = {
+    session: null,
+    lastPausedReported: null,
+    channelVisit: null,
+    pendingChannel: null,
+    activeSearchKey: null,
+    timerId: null,
+  };
+
   let saveQueue = Promise.resolve();
-  let timerId = null;
-
-  let currentChannelVisit = null;
-  let pendingChannel = null;
-  let activeSearchKey = null;
-
   const categoryCache = new Map();
   const fetchingCategories = new Set();
+  const boundVideos = new WeakSet();
 
+  // --- SEGURIDAD DE CONTEXTO Y COLA DE STORAGE ---
   function isContextValid() {
     return Boolean(
       typeof chrome !== "undefined" &&
@@ -26,11 +36,9 @@
   }
 
   function stopIfInvalid() {
-    if (!isContextValid()) {
-      if (timerId) clearInterval(timerId);
-      return true;
-    }
-    return false;
+    if (isContextValid()) return false;
+    if (state.timerId) clearInterval(state.timerId);
+    return true;
   }
 
   function enqueueStorage(fn) {
@@ -41,7 +49,7 @@
           .toLowerCase()
           .includes("context invalidated")
       ) {
-        if (timerId) clearInterval(timerId);
+        if (state.timerId) clearInterval(state.timerId);
         return;
       }
       console.error("[YT Recap] Error de almacenamiento:", err);
@@ -49,6 +57,7 @@
     return saveQueue;
   }
 
+  // --- EXTRACCIÓN DE METADATOS ---
   function extractVideoId() {
     const vParam = new URLSearchParams(location.search).get("v");
     if (vParam) return vParam;
@@ -108,9 +117,7 @@
           .querySelector('meta[itemprop="identifier"]')
           ?.getAttribute("content") || "";
       const microUrl =
-        micro
-          .querySelector('link[itemprop="url"], meta[itemprop="embedUrl"]')
-          ?.getAttribute("href") ||
+        micro.querySelector('link[itemprop="url"]')?.getAttribute("href") ||
         micro
           .querySelector('meta[itemprop="embedUrl"]')
           ?.getAttribute("content") ||
@@ -120,16 +127,15 @@
           .querySelector('meta[itemprop="genre"]')
           ?.getAttribute("content") || "";
 
-      const matchesCurrent =
-        (microId && microId === videoId) ||
-        (microUrl && microUrl.includes(videoId));
-      if (microGenre && matchesCurrent) {
+      if (
+        microGenre &&
+        ((microId && microId === videoId) || microUrl.includes(videoId))
+      ) {
         categoryCache.set(videoId, microGenre);
         return microGenre;
       }
     }
 
-    // Si navegamos en SPA y el microformat aún está viejo, consultarlo una vez para ese videoId
     if (!fetchingCategories.has(videoId)) {
       fetchingCategories.add(videoId);
       fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`, {
@@ -137,15 +143,13 @@
       })
         .then((r) => (r.ok ? r.text() : ""))
         .then((html) => {
-          if (!html) return;
-          const m = html.match(/"category"\s*:\s*"([^"]+)"/);
-          if (m && m[1]) {
-            const cat = m[1].replace(/\\u0026/g, "&");
-            categoryCache.set(videoId, cat);
-            if (currentSession && currentSession.videoId === videoId) {
-              currentSession.category = cat;
-              upsertSession(currentSession, true);
-            }
+          const match = html.match(/"category"\s*:\s*"([^"]+)"/);
+          if (!match?.[1]) return;
+          const cat = match[1].replace(/\\u0026/g, "&");
+          categoryCache.set(videoId, cat);
+          if (state.session?.videoId === videoId) {
+            state.session.category = cat;
+            upsertSession(state.session, true);
           }
         })
         .catch(() => {})
@@ -158,12 +162,25 @@
   function getActiveVideo() {
     const all = [...document.querySelectorAll("video")];
     const playing = all.find((v) => !v.paused && !v.ended && v.readyState >= 2);
-    if (playing) return playing;
     return (
+      playing ||
       document.querySelector("#movie_player video.html5-main-video") ||
       all[0] ||
       null
     );
+  }
+
+  function bindVideoListeners(video) {
+    if (!video || boundVideos.has(video)) return;
+    boundVideos.add(video);
+    const sync = () => {
+      if (stopIfInvalid()) return;
+      const info = getTrackInfo();
+      if (info) publishNowPlaying(video, info);
+    };
+    ["play", "pause", "ended", "ratechange", "volumechange"].forEach((evt) => {
+      video.addEventListener(evt, sync, { passive: true });
+    });
   }
 
   function getTrackInfo() {
@@ -194,8 +211,8 @@
           .querySelector("ytmusic-player-bar .byline")
           ?.textContent?.trim() || "";
       domArtist = byline.split("•")[0]?.trim() || "";
-      const artistLink = document.querySelector("ytmusic-player-bar .byline a");
-      if (artistLink?.href) channelUrl = artistLink.href;
+      channelUrl =
+        document.querySelector("ytmusic-player-bar .byline a")?.href || "";
     } else {
       domTitle =
         document
@@ -207,7 +224,7 @@
         "ytd-watch-metadata #channel-name a, #upload-info #channel-name a, ytd-channel-name a, ytd-reel-video-renderer[is-active] #channel-name a",
       );
       domArtist = channelEl?.textContent?.trim() || "";
-      if (channelEl?.href) channelUrl = channelEl.href;
+      channelUrl = channelEl?.href || "";
     }
 
     const docTitle = document.title
@@ -227,7 +244,6 @@
     const artist =
       (isMusic ? metaArtist || domArtist : domArtist || metaArtist) ||
       "YouTube";
-
     if (!artwork && videoId) {
       artwork = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
     }
@@ -255,24 +271,23 @@
 
   // --- BÚSQUEDAS ---
   function handleSearchTracking() {
-    let query = "";
-    if (!isMusic && location.pathname === "/results") {
-      query =
-        new URLSearchParams(location.search).get("search_query")?.trim() || "";
-    } else if (isMusic && location.pathname === "/search") {
-      query = new URLSearchParams(location.search).get("q")?.trim() || "";
-    }
+    const query =
+      !isMusic && location.pathname === "/results"
+        ? new URLSearchParams(location.search).get("search_query")?.trim()
+        : isMusic && location.pathname === "/search"
+          ? new URLSearchParams(location.search).get("q")?.trim()
+          : "";
 
     if (!query) {
-      activeSearchKey = null;
+      state.activeSearchKey = null;
       return;
     }
 
     const key = `${source}::${query.toLowerCase()}`;
-    if (activeSearchKey === key) return;
-    activeSearchKey = key;
+    if (state.activeSearchKey === key) return;
+    state.activeSearchKey = key;
 
-    const searchEntry = {
+    const entry = {
       id: `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       query,
       normalized: query.toLowerCase(),
@@ -288,14 +303,13 @@
       const lastSame = [...searches]
         .reverse()
         .find(
-          (s) =>
-            s.normalized === searchEntry.normalized &&
-            s.source === searchEntry.source,
+          (s) => s.normalized === entry.normalized && s.source === entry.source,
         );
-      if (lastSame && searchEntry.timestamp - lastSame.timestamp < 15000)
-        return;
-      searches.push(searchEntry);
-      if (searches.length > 2000) searches.splice(0, searches.length - 2000);
+      if (lastSame && entry.timestamp - lastSame.timestamp < 15000) return;
+      searches.push(entry);
+      if (searches.length > CONFIG.MAX_SEARCHES) {
+        searches.splice(0, searches.length - CONFIG.MAX_SEARCHES);
+      }
       await chrome.storage.local.set({ searches });
     });
   }
@@ -304,8 +318,11 @@
   function isLikeActive(btn) {
     if (!btn) return false;
     if (btn.getAttribute("aria-pressed") === "true") return true;
-    const ytmRenderer = btn.closest("ytmusic-like-button-renderer");
-    return ytmRenderer?.getAttribute("like-status") === "LIKE";
+    return (
+      btn
+        .closest("ytmusic-like-button-renderer")
+        ?.getAttribute("like-status") === "LIKE"
+    );
   }
 
   function isSubscribeActive(btn) {
@@ -332,7 +349,6 @@
       const interactions = Array.isArray(data.interactions)
         ? data.interactions
         : [];
-      // Evitar duplicados si tocó Like/Unlike/Like en menos de 2 minutos
       const recentDup = interactions.find(
         (it) =>
           it.type === entry.type &&
@@ -352,79 +368,64 @@
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
 
-      // 1. Detectar Me gusta
       const likeBtn = target.closest(
         "like-button-view-model button, ytd-toggle-button-renderer#like-button button, #like-button button, ytmusic-like-button-renderer #button-shape-like button, ytmusic-like-button-renderer tp-yt-paper-icon-button.like",
       );
       if (likeBtn) {
         const wasLiked = isLikeActive(likeBtn);
         setTimeout(() => {
-          if (stopIfInvalid()) return;
-          if (!wasLiked && isLikeActive(likeBtn)) {
-            const info = getTrackInfo();
-            if (!info) return;
-            saveInteraction({
-              id: `lk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              type: "like",
-              targetKey: info.videoId || info.trackKey,
-              videoId: info.videoId || "",
-              videoUrl: info.videoUrl || location.href,
-              title: info.title,
-              artist: info.artist,
-              artwork: info.artwork,
-              category: info.category || "",
-              source,
-              timestamp: Date.now(),
-            });
-          }
+          if (stopIfInvalid() || wasLiked || !isLikeActive(likeBtn)) return;
+          const info = getTrackInfo();
+          if (!info) return;
+          saveInteraction({
+            id: `lk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "like",
+            targetKey: info.videoId || info.trackKey,
+            videoId: info.videoId || "",
+            videoUrl: info.videoUrl || location.href,
+            title: info.title,
+            artist: info.artist,
+            artwork: info.artwork,
+            category: info.category || "",
+            source,
+            timestamp: Date.now(),
+          });
         }, 450);
       }
 
-      // 2. Detectar Suscripción nueva
       const subBtn = target.closest(
         "ytd-subscribe-button-renderer button, yt-subscribe-button-view-model button, #subscribe-button button, ytmusic-subscribe-button-renderer button",
       );
       if (subBtn) {
         const wasSub = isSubscribeActive(subBtn);
         setTimeout(() => {
-          if (stopIfInvalid()) return;
-          if (!wasSub && isSubscribeActive(subBtn)) {
-            const basePath = getChannelBasePath();
-            let name = "";
-            let avatar = "";
-            let url = "";
+          if (stopIfInvalid() || wasSub || !isSubscribeActive(subBtn)) return;
+          const basePath = getChannelBasePath();
+          const chInfo = basePath ? getChannelPageInfo(basePath) : null;
+          const trackInfo = chInfo ? null : getTrackInfo();
 
-            if (basePath) {
-              const chInfo = getChannelPageInfo(basePath);
-              name = chInfo.name;
-              avatar = chInfo.avatar;
-              url = chInfo.url;
-            } else {
-              const info = getTrackInfo();
-              name = info?.artist || "Canal de YouTube";
-              avatar = info?.artwork || "";
-              url = info?.channelUrl || "";
-            }
+          const name = chInfo?.name || trackInfo?.artist || "Canal de YouTube";
+          const avatar = chInfo?.avatar || trackInfo?.artwork || "";
+          const url = chInfo?.url || trackInfo?.channelUrl || "";
 
-            saveInteraction({
-              id: `sb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              type: "subscribe",
-              targetKey: (url || name).toLowerCase(),
-              title: name,
-              artist: source === "yt_music" ? "YT Music" : "YouTube",
-              artwork: avatar,
-              channelUrl: url,
-              source,
-              timestamp: Date.now(),
-            });
-          }
+          saveInteraction({
+            id: `sb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "subscribe",
+            targetKey: (url || name).toLowerCase(),
+            title: name,
+            artist: isMusic ? "YT Music" : "YouTube",
+            artwork: avatar,
+            channelUrl: url,
+            source,
+            timestamp: Date.now(),
+          });
         }, 550);
       }
     },
     true,
   );
 
-  // --- DETECCIÓN DE PÁGINAS DE CANAL ---
+  // --- CANALES ---
   function getChannelBasePath() {
     const match = location.pathname.match(
       /^\/(@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)/i,
@@ -434,22 +435,17 @@
     return `/${match[1]}`;
   }
 
-  function findVisibleText(root, selectors) {
+  function findVisible(root, selectors, attr) {
     for (const sel of selectors) {
-      const els = [...root.querySelectorAll(sel)];
-      const visible = els.find(
-        (el) => !el.closest("[hidden]") && el.textContent?.trim(),
+      const visible = [...root.querySelectorAll(sel)].find(
+        (el) =>
+          !el.closest("[hidden]") && (attr ? el[attr] : el.textContent?.trim()),
       );
-      if (visible) return visible.textContent.replace(/\s+/g, " ").trim();
-    }
-    return "";
-  }
-
-  function findVisibleImg(root, selectors) {
-    for (const sel of selectors) {
-      const els = [...root.querySelectorAll(sel)];
-      const visible = els.find((el) => !el.closest("[hidden]") && el.src);
-      if (visible) return visible.src;
+      if (visible) {
+        return attr
+          ? visible[attr]
+          : visible.textContent.replace(/\s+/g, " ").trim();
+      }
     }
     return "";
   }
@@ -487,8 +483,8 @@
           "#channel-header img",
         ];
 
-    const domName = findVisibleText(scope, nameSelectors);
-    const avatar = findVisibleImg(scope, avatarSelectors);
+    const domName = findVisible(scope, nameSelectors);
+    const avatar = findVisible(scope, avatarSelectors, "src");
     const handleFallback = basePath.startsWith("/@") ? basePath.slice(1) : "";
 
     return {
@@ -532,39 +528,38 @@
   function handleChannelTracking() {
     const basePath = getChannelBasePath();
     if (!basePath) {
-      currentChannelVisit = null;
-      pendingChannel = null;
+      state.channelVisit = null;
+      state.pendingChannel = null;
       return;
     }
 
     const normPath = basePath.toLowerCase();
-
-    if (currentChannelVisit && currentChannelVisit.normPath === normPath) {
-      if (currentChannelVisit.ticks < 6) {
-        currentChannelVisit.ticks += 1;
+    if (state.channelVisit?.normPath === normPath) {
+      if (state.channelVisit.ticks < 6) {
+        state.channelVisit.ticks += 1;
         const info = getChannelPageInfo(basePath);
-        const changedName =
-          info.domName && info.domName !== currentChannelVisit.name;
-        const gainedAvatar = info.avatar && !currentChannelVisit.avatar;
-        if (changedName || gainedAvatar) {
-          if (info.domName) currentChannelVisit.name = info.domName;
-          if (info.avatar) currentChannelVisit.avatar = info.avatar;
-          saveChannelVisit(currentChannelVisit, true);
+        if (
+          (info.domName && info.domName !== state.channelVisit.name) ||
+          (info.avatar && !state.channelVisit.avatar)
+        ) {
+          if (info.domName) state.channelVisit.name = info.domName;
+          if (info.avatar) state.channelVisit.avatar = info.avatar;
+          saveChannelVisit(state.channelVisit, true);
         }
       }
       return;
     }
 
-    if (!pendingChannel || pendingChannel.normPath !== normPath) {
-      pendingChannel = { normPath, basePath, ticks: 0 };
+    if (!state.pendingChannel || state.pendingChannel.normPath !== normPath) {
+      state.pendingChannel = { normPath, basePath, ticks: 0 };
     } else {
-      pendingChannel.ticks += 1;
+      state.pendingChannel.ticks += 1;
     }
 
     const info = getChannelPageInfo(basePath);
-    if (!info.domName && pendingChannel.ticks < 2) return;
+    if (!info.domName && state.pendingChannel.ticks < 2) return;
 
-    const visit = {
+    state.channelVisit = {
       id: `ch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       normPath,
       basePath,
@@ -574,21 +569,19 @@
       timestamp: Date.now(),
       ticks: 0,
     };
-
-    currentChannelVisit = visit;
-    pendingChannel = null;
-    saveChannelVisit(visit, false);
+    state.pendingChannel = null;
+    saveChannelVisit(state.channelVisit, false);
   }
 
-  // --- SESIONES DE REPRODUCCIÓN Y SKIPS ---
+  // --- SESIONES DE REPRODUCCIÓN ---
   function createSession(info, video, isLoop = false) {
     const dur = Number.isFinite(video.duration)
       ? Math.round(video.duration)
       : 0;
-    let minRequired = MIN_SECONDS_TO_COUNT;
+    let minRequired = CONFIG.MIN_SECONDS_TO_COUNT;
     if (isLoop) {
-      minRequired = MIN_SECONDS_ON_LOOP;
-    } else if (dur > 0 && dur < MIN_SECONDS_TO_COUNT) {
+      minRequired = CONFIG.MIN_SECONDS_ON_LOOP;
+    } else if (dur > 0 && dur < CONFIG.MIN_SECONDS_TO_COUNT) {
       minRequired = Math.max(5, Math.floor(dur * 0.8));
     }
 
@@ -609,13 +602,8 @@
   }
 
   function recordSkip(session) {
-    if (stopIfInvalid() || !session) return;
-    if (
-      session.isLoop ||
-      session.seconds < 2 ||
-      session.seconds >= session.minRequired
-    )
-      return;
+    if (stopIfInvalid() || !session || session.isLoop) return;
+    if (session.seconds < 2 || session.seconds >= session.minRequired) return;
 
     const skipEntry = {
       id: `sk-${session.id}`,
@@ -637,15 +625,21 @@
       const data = await chrome.storage.local.get({ skips: [] });
       const skips = Array.isArray(data.skips) ? data.skips : [];
       skips.push(skipEntry);
-      if (skips.length > 1000) skips.splice(0, skips.length - 1000);
+      if (skips.length > CONFIG.MAX_SKIPS) {
+        skips.splice(0, skips.length - CONFIG.MAX_SKIPS);
+      }
       await chrome.storage.local.set({ skips });
     });
   }
 
   function upsertSession(session, force = false) {
-    if (stopIfInvalid() || !session) return;
-    if (session.seconds < session.minRequired) return;
-    if (!force && session.seconds - session.lastSavedSeconds < 5) return;
+    if (stopIfInvalid() || !session || session.seconds < session.minRequired)
+      return;
+    if (
+      !force &&
+      session.seconds - session.lastSavedSeconds < CONFIG.SAVE_INTERVAL_SEC
+    )
+      return;
 
     const avgRate =
       session.rateCount > 0
@@ -688,22 +682,16 @@
       const data = await chrome.storage.local.get({ history: [] });
       const history = Array.isArray(data.history) ? data.history : [];
       const idx = history.findIndex((item) => item.id === snapshot.id);
-      if (idx >= 0) {
-        history[idx] = snapshot;
-      } else {
-        history.push(snapshot);
-      }
+      if (idx >= 0) history[idx] = snapshot;
+      else history.push(snapshot);
       await chrome.storage.local.set({ history });
     });
   }
 
   function finalizeSession(session) {
     if (!session) return;
-    if (session.seconds >= session.minRequired) {
-      upsertSession(session, true);
-    } else {
-      recordSkip(session);
-    }
+    if (session.seconds >= session.minRequired) upsertSession(session, true);
+    else recordSkip(session);
   }
 
   async function publishNowPlaying(video, info) {
@@ -712,7 +700,7 @@
     try {
       const isPaused = Boolean(video.paused || video.ended);
       if (isPaused) {
-        if (lastPausedReported === true) return;
+        if (state.lastPausedReported === true) return;
         const { nowPlaying } = await chrome.storage.local.get({
           nowPlaying: null,
         });
@@ -726,7 +714,7 @@
         }
       }
 
-      lastPausedReported = isPaused;
+      state.lastPausedReported = isPaused;
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
 
       await chrome.storage.local.set({
@@ -735,7 +723,7 @@
           title: info.title,
           artist: info.artist,
           album: info.album || "",
-          category: currentSession?.category || info.category || "",
+          category: state.session?.category || info.category || "",
           artwork: info.artwork,
           videoUrl: info.videoUrl,
           source: info.source,
@@ -747,11 +735,11 @@
           muted: Boolean(video.muted || video.volume === 0),
           playbackRate: Number((video.playbackRate || 1).toFixed(2)),
           loopActive: Boolean(video.loop),
-          sessionSeconds: currentSession ? currentSession.seconds : 0,
-          minRequired: currentSession
-            ? currentSession.minRequired
-            : MIN_SECONDS_TO_COUNT,
-          isLoopSession: currentSession ? currentSession.isLoop : false,
+          sessionSeconds: state.session ? state.session.seconds : 0,
+          minRequired: state.session
+            ? state.session.minRequired
+            : CONFIG.MIN_SECONDS_TO_COUNT,
+          isLoopSession: state.session ? state.session.isLoop : false,
           updatedAt: Date.now(),
         },
       });
@@ -761,18 +749,20 @@
           .toLowerCase()
           .includes("context invalidated")
       ) {
-        if (timerId) clearInterval(timerId);
+        if (state.timerId) clearInterval(state.timerId);
       }
     }
   }
 
-  timerId = setInterval(() => {
+  state.timerId = setInterval(() => {
     if (stopIfInvalid()) return;
 
     handleChannelTracking();
     handleSearchTracking();
 
     const video = getActiveVideo();
+    if (video) bindVideoListeners(video);
+
     const info = getTrackInfo();
     if (!video || !info) return;
 
@@ -781,81 +771,60 @@
       return;
     }
 
-    if (currentSession && currentSession.trackKey !== info.trackKey) {
-      finalizeSession(currentSession);
-      currentSession = null;
+    if (state.session && state.session.trackKey !== info.trackKey) {
+      finalizeSession(state.session);
+      state.session = null;
     }
 
-    if (!currentSession) {
-      currentSession = createSession(info, video, false);
+    if (!state.session) {
+      state.session = createSession(info, video, false);
     } else {
-      if (
-        info.artist &&
-        info.artist !== "YouTube" &&
-        currentSession.artist !== info.artist
-      ) {
-        currentSession.artist = info.artist;
-      }
-      if (info.album && !currentSession.album)
-        currentSession.album = info.album;
-      if (info.category && !currentSession.category)
-        currentSession.category = info.category;
-      if (info.channelUrl && !currentSession.channelUrl)
-        currentSession.channelUrl = info.channelUrl;
-      if (info.artwork && !currentSession.artwork)
-        currentSession.artwork = info.artwork;
-      if (info.videoId && !currentSession.videoId) {
-        currentSession.videoId = info.videoId;
-        currentSession.videoUrl = info.videoUrl;
+      const s = state.session;
+      if (info.artist && info.artist !== "YouTube" && s.artist !== info.artist)
+        s.artist = info.artist;
+      if (info.album && !s.album) s.album = info.album;
+      if (info.category && !s.category) s.category = info.category;
+      if (info.channelUrl && !s.channelUrl) s.channelUrl = info.channelUrl;
+      if (info.artwork && !s.artwork) s.artwork = info.artwork;
+      if (info.videoId && !s.videoId) {
+        s.videoId = info.videoId;
+        s.videoUrl = info.videoUrl;
       }
 
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
-      if (dur > 0 && !currentSession.duration)
-        currentSession.duration = Math.round(dur);
+      if (dur > 0 && !s.duration) s.duration = Math.round(dur);
 
-      const nearEnd =
-        dur > 0 && currentSession.maxTimeReached >= Math.max(5, dur - 8);
-      const restarted =
-        currentSession.maxTimeReached > 8 && video.currentTime < 5;
+      const nearEnd = dur > 0 && s.maxTimeReached >= Math.max(5, dur - 8);
+      const restarted = s.maxTimeReached > 8 && video.currentTime < 5;
 
-      if (
-        restarted &&
-        (video.loop ||
-          nearEnd ||
-          currentSession.seconds >= currentSession.minRequired)
-      ) {
+      if (restarted && (video.loop || nearEnd || s.seconds >= s.minRequired)) {
         const isActualLoop = Boolean(video.loop || nearEnd);
-        finalizeSession(currentSession);
-        currentSession = createSession(info, video, isActualLoop);
+        finalizeSession(s);
+        state.session = createSession(info, video, isActualLoop);
       } else {
-        currentSession.seconds += 1;
-        if (video.muted || video.volume === 0) currentSession.mutedSeconds += 1;
-        currentSession.rateSum += video.playbackRate || 1;
-        currentSession.rateCount += 1;
-
-        if (video.currentTime > currentSession.maxTimeReached) {
-          currentSession.maxTimeReached = video.currentTime;
-        }
-
-        const justUnlocked =
-          currentSession.seconds === currentSession.minRequired;
-        upsertSession(currentSession, justUnlocked);
+        s.seconds += 1;
+        if (video.muted || video.volume === 0) s.mutedSeconds += 1;
+        s.rateSum += video.playbackRate || 1;
+        s.rateCount += 1;
+        if (video.currentTime > s.maxTimeReached)
+          s.maxTimeReached = video.currentTime;
+        upsertSession(s, s.seconds === s.minRequired);
       }
     }
 
     publishNowPlaying(video, info);
-  }, 1000);
+  }, CONFIG.TICK_MS);
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && currentSession) {
-      upsertSession(currentSession, true);
+    if (document.visibilityState === "hidden" && state.session) {
+      upsertSession(state.session, true);
     }
   });
 
   window.addEventListener("pagehide", async () => {
-    if (currentSession) {
-      finalizeSession(currentSession);
-      currentSession = null;
+    if (state.session) {
+      finalizeSession(state.session);
+      state.session = null;
     }
     if (isContextValid()) {
       try {
@@ -866,7 +835,7 @@
           await chrome.storage.local.remove("nowPlaying");
         }
       } catch {
-        // Ignorar
+        // Ignorar al cerrar pestaña
       }
     }
   });

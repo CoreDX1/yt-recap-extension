@@ -20,14 +20,14 @@
                     <button
                         id="importBtn"
                         class="pill-btn"
-                        title="Importar Google Takeout o backup JSON"
+                        title="Importar backup .zip, .json o Google Takeout"
                     >
                         Importar
                     </button>
                     <input
                         id="importInput"
                         type="file"
-                        accept=".json,application/json"
+                        accept=".json,.zip,application/json,application/zip"
                         hidden
                     />
                     <button
@@ -40,7 +40,7 @@
                 </div>
             </div>
 
-            <div id="importStatus" class="import-status" hidden></div>
+            <div id="statusBanner" class="status-banner" hidden></div>
 
             <!-- Tarjeta EN VIVO -->
             <div id="nowPlayingCard" class="now-playing">
@@ -122,28 +122,28 @@
         <main id="tab-summary" class="tab-panel active">
             <section class="stats-grid">
                 <div class="stat-card">
-                    <span class="stat-label">Tiempo total</span>
-                    <strong id="totalTime">0 min</strong>
+                    <span class="stat-label">Tiempo total</span
+                    ><strong id="totalTime">0 min</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Reproducciones</span>
-                    <strong id="totalPlays">0</strong>
+                    <span class="stat-label">Reproducciones</span
+                    ><strong id="totalPlays">0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Bucles detectados</span>
-                    <strong id="totalLoops">🔁 0</strong>
+                    <span class="stat-label">Bucles detectados</span
+                    ><strong id="totalLoops">🔁 0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Títulos únicos</span>
-                    <strong id="uniqueCount">0</strong>
+                    <span class="stat-label">Títulos únicos</span
+                    ><strong id="uniqueCount">0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Racha actual</span>
-                    <strong id="streakDays">0 días</strong>
+                    <span class="stat-label">Racha actual</span
+                    ><strong id="streakDays">0 días</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Hora pico</span>
-                    <strong id="peakHour">—</strong>
+                    <span class="stat-label">Hora pico</span
+                    ><strong id="peakHour">—</strong>
                 </div>
             </section>
 
@@ -208,11 +208,8 @@
                 <h2>Actividad por hora del día (00h – 23h)</h2>
                 <div id="hoursChart" class="hours-chart"></div>
                 <div class="hours-labels">
-                    <span>00h</span>
-                    <span>06h</span>
-                    <span>12h</span>
-                    <span>18h</span>
-                    <span>23h</span>
+                    <span>00h</span><span>06h</span><span>12h</span
+                    ><span>18h</span><span>23h</span>
                 </div>
             </section>
 
@@ -242,7 +239,7 @@
             </section>
         </main>
 
-        <!-- TAB 4: CALENDARIO, TOP DEL MES, LIKES/SUBS DEL MES Y TOP SEMANAL -->
+        <!-- TAB 4: CALENDARIO -->
         <main id="tab-calendar" class="tab-panel" hidden>
             <section class="calendar-box">
                 <div class="cal-header">
@@ -276,7 +273,6 @@
                     <span>D</span><span>L</span><span>M</span><span>X</span
                     ><span>J</span><span>V</span><span>S</span>
                 </div>
-
                 <div id="calGrid" class="cal-grid"></div>
             </section>
 
@@ -350,16 +346,16 @@
         <main id="tab-channels" class="tab-panel" hidden>
             <section class="stats-grid">
                 <div class="stat-card">
-                    <span class="stat-label">Canales únicos</span>
-                    <strong id="chUniqueCount">0</strong>
+                    <span class="stat-label">Canales únicos</span
+                    ><strong id="chUniqueCount">0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Visitas a canales</span>
-                    <strong id="chTotalVisits">0</strong>
+                    <span class="stat-label">Visitas a canales</span
+                    ><strong id="chTotalVisits">0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Suscrip. nuevas</span>
-                    <strong id="chNewSubs">🔔 0</strong>
+                    <span class="stat-label">Suscrip. nuevas</span
+                    ><strong id="chNewSubs">🔔 0</strong>
                 </div>
             </section>
 
@@ -367,8 +363,7 @@
                 <h2>Ranking de canales</h2>
                 <ul id="channelsTopList" class="top-list compact"></ul>
                 <p id="channelsEmpty" class="empty-msg small" hidden>
-                    Todavía no registraste visitas ni reproducciones de canales
-                    en este período.
+                    Todavía no registraste canales en este período.
                 </p>
             </section>
 
@@ -376,8 +371,7 @@
                 <h2>Últimas visitas directas a canales</h2>
                 <ul id="channelsRecentList" class="top-list compact"></ul>
                 <p id="channelsRecentEmpty" class="empty-msg small" hidden>
-                    Entrá a la página de cualquier canal en YouTube para
-                    registrarlo aquí.
+                    Entrá a cualquier canal en YouTube para registrarlo aquí.
                 </p>
             </section>
         </main>
@@ -386,16 +380,16 @@
         <main id="tab-likes" class="tab-panel" hidden>
             <section class="stats-grid">
                 <div class="stat-card">
-                    <span class="stat-label">Me gusta</span>
-                    <strong id="lkTotalLikes">❤️ 0</strong>
+                    <span class="stat-label">Me gusta</span
+                    ><strong id="lkTotalLikes">❤️ 0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Suscrip. nuevas</span>
-                    <strong id="lkTotalSubs">🔔 0</strong>
+                    <span class="stat-label">Suscrip. nuevas</span
+                    ><strong id="lkTotalSubs">🔔 0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Búsquedas</span>
-                    <strong id="lkTotalSearches">🔍 0</strong>
+                    <span class="stat-label">Búsquedas</span
+                    ><strong id="lkTotalSearches">🔍 0</strong>
                 </div>
             </section>
 
@@ -403,7 +397,7 @@
                 <h2>❤️ Videos y canciones con Me gusta</h2>
                 <ul id="likesList" class="top-list compact"></ul>
                 <p id="likesEmpty" class="empty-msg small" hidden>
-                    Todavía no diste Me gusta a ningún video en este período.
+                    Todavía no diste Me gusta en este período.
                 </p>
             </section>
 
@@ -430,6 +424,6 @@
             </button>
         </footer>
 
-        <script src="popup.js"></script>
+        <script type="module" src="src/popup.js"></script>
     </body>
 </html>
