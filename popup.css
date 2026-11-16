@@ -695,3 +695,76 @@ footer {
 .danger-link:hover {
     color: #ff5555;
 }
+
+.badge.category {
+    background: rgba(168, 85, 247, 0.2);
+    color: #d8b4fe;
+}
+
+.sub-pills {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.sub-pill {
+    background: #1a1a1a;
+    color: #aaa;
+    border: 1px solid #2d2d2d;
+    border-radius: 14px;
+    padding: 4px 9px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sub-pill.active {
+    background: #2f2328;
+    color: #fff;
+    border-color: #ff6b63;
+}
+
+.cat-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.cat-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.cat-row-top {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: #ddd;
+}
+
+.cat-row-top span:last-child {
+    color: #999;
+    font-size: 11px;
+}
+
+.cat-track {
+    width: 100%;
+    height: 6px;
+    background: #262626;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.cat-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #a855f7, #ff6b63);
+    border-radius: 4px;
+}
+
+/* Ajuste para 6 pestañas en una sola fila */
+.tab-btn {
+    font-size: 10.5px;
+    padding: 6px 2px;
+}

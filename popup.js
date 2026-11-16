@@ -18,6 +18,7 @@ const npContent = document.getElementById("npContent");
 const npThumb = document.getElementById("npThumb");
 const npStatusBadge = document.getElementById("npStatusBadge");
 const npSourceBadge = document.getElementById("npSourceBadge");
+const npCategoryBadge = document.getElementById("npCategoryBadge");
 const npFormatBadge = document.getElementById("npFormatBadge");
 const npLoopBadge = document.getElementById("npLoopBadge");
 const npTitle = document.getElementById("npTitle");
@@ -38,11 +39,17 @@ const makePlaylistBtn = document.getElementById("makePlaylistBtn");
 const topListEl = document.getElementById("topList");
 const emptyMsgEl = document.getElementById("emptyMsg");
 
-// Reciente & Horarios
+// Reciente
 const recentListEl = document.getElementById("recentList");
 const recentEmptyEl = document.getElementById("recentEmpty");
+
+// Stats
+const categoriesBoxEl = document.getElementById("categoriesBox");
+const categoriesListEl = document.getElementById("categoriesList");
 const hoursChartEl = document.getElementById("hoursChart");
 const breakdownStatsEl = document.getElementById("breakdownStats");
+const searchesBoxEl = document.getElementById("searchesBox");
+const topSearchesListEl = document.getElementById("topSearchesList");
 const albumsBoxEl = document.getElementById("albumsBox");
 const topAlbumsListEl = document.getElementById("topAlbumsList");
 const topArtistsListEl = document.getElementById("topArtistsList");
@@ -63,17 +70,31 @@ const calMonthImgBtn = document.getElementById("calMonthImgBtn");
 const calMonthPlaylistBtn = document.getElementById("calMonthPlaylistBtn");
 const calMonthTopList = document.getElementById("calMonthTopList");
 const calMonthTopEmpty = document.getElementById("calMonthTopEmpty");
+const calMonthSocialBox = document.getElementById("calMonthSocialBox");
+const calMonthSocialTitle = document.getElementById("calMonthSocialTitle");
+const calMonthSocialList = document.getElementById("calMonthSocialList");
 const calWeeksTitle = document.getElementById("calWeeksTitle");
 const calWeeksList = document.getElementById("calWeeksList");
 
 // Canales
 const chUniqueCountEl = document.getElementById("chUniqueCount");
 const chTotalVisitsEl = document.getElementById("chTotalVisits");
-const chTopNameEl = document.getElementById("chTopName");
+const chNewSubsEl = document.getElementById("chNewSubs");
 const channelsTopListEl = document.getElementById("channelsTopList");
 const channelsEmptyEl = document.getElementById("channelsEmpty");
 const channelsRecentListEl = document.getElementById("channelsRecentList");
 const channelsRecentEmptyEl = document.getElementById("channelsRecentEmpty");
+
+// Likes / Social
+const lkTotalLikesEl = document.getElementById("lkTotalLikes");
+const lkTotalSubsEl = document.getElementById("lkTotalSubs");
+const lkTotalSearchesEl = document.getElementById("lkTotalSearches");
+const likesListEl = document.getElementById("likesList");
+const likesEmptyEl = document.getElementById("likesEmpty");
+const subsListEl = document.getElementById("subsList");
+const subsEmptyEl = document.getElementById("subsEmpty");
+const socialSearchesListEl = document.getElementById("socialSearchesList");
+const socialSearchesEmptyEl = document.getElementById("socialSearchesEmpty");
 
 const clearBtn = document.getElementById("clearBtn");
 
@@ -81,9 +102,15 @@ const nowInit = new Date();
 let calYear = nowInit.getFullYear();
 let calMonth = nowInit.getMonth();
 let selectedDateKey = toDateKey(nowInit);
+let recentMode = "plays";
+let calDayMode = "all";
+
 let cachedHistory = [];
 let cachedChannelVisits = [];
 let cachedSkips = [];
+let cachedInteractions = [];
+let cachedSearches = [];
+
 let currentTopVideoIds = [];
 let currentMonthTopVideoIds = [];
 let summaryCardData = null;
@@ -91,15 +118,33 @@ let monthCardData = null;
 
 if (isFullMode) expandBtn.hidden = true;
 
+const CATEGORY_LABELS = {
+  Music: "Música",
+  Gaming: "Videojuegos",
+  Entertainment: "Entretenimiento",
+  "Science & Technology": "Ciencia y Tech",
+  Education: "Educación",
+  "People & Blogs": "Personas y Blogs",
+  Comedy: "Comedia",
+  "News & Politics": "Noticias",
+  Sports: "Deportes",
+  "Film & Animation": "Cine y Animación",
+  "Howto & Style": "Tutoriales",
+  "Autos & Vehicles": "Autos",
+  "Pets & Animals": "Mascotas",
+  "Travel & Events": "Viajes",
+};
+
+function translateCategory(cat) {
+  if (!cat) return "";
+  return CATEGORY_LABELS[cat] || cat;
+}
+
 function toDateKey(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
-}
-
-function getGroupKey(item) {
-  return `${item.trackKey || item.source}::${(item.title || "").trim().toLowerCase()}`;
 }
 
 function extractIdFromItem(item) {
@@ -120,6 +165,18 @@ function extractIdFromItem(item) {
     if (parts[1] && parts[1].length >= 8) return parts[1];
   }
   return "";
+}
+
+// Clave unificada: evita duplicados entre registros viejos y nuevos de un mismo video
+function getGroupKey(item) {
+  const normTitle = (item.title || "").trim().toLowerCase();
+  if (item.source === "yt_music") {
+    return `ytm::${normTitle}::${(item.artist || "").trim().toLowerCase()}`;
+  }
+  const vid = extractIdFromItem(item);
+  return vid
+    ? `yt::${vid}::${normTitle}`
+    : `${item.source || "yt"}::${normTitle}`;
 }
 
 function resolveVideoUrl(item) {
@@ -197,6 +254,18 @@ function matchesFilter(item, checkDate = true) {
   return true;
 }
 
+function matchesPeriodAndSourceOnly(item, checkDate = true) {
+  const days = periodSelect.value;
+  const filter = sourceSelect.value;
+  if (checkDate && days !== "all") {
+    const cutoff = Date.now() - Number(days) * 24 * 60 * 60 * 1000;
+    if (item.timestamp < cutoff) return false;
+  }
+  if (filter === "yt_music") return item.source === "yt_music";
+  if (filter === "youtube") return item.source === "youtube";
+  return true;
+}
+
 function renderNowPlaying(np) {
   const isStale = !np || (!np.paused && Date.now() - np.updatedAt > 6000);
   if (isStale) {
@@ -215,6 +284,13 @@ function renderNowPlaying(np) {
   npStatusBadge.classList.toggle("paused", np.paused);
 
   npSourceBadge.textContent = np.source === "yt_music" ? "YT Music" : "YouTube";
+
+  if (np.category) {
+    npCategoryBadge.textContent = translateCategory(np.category);
+    npCategoryBadge.hidden = false;
+  } else {
+    npCategoryBadge.hidden = true;
+  }
 
   const formatLabels = { short: "Short", live: "En vivo", mix: "Mix" };
   const fmtText =
@@ -344,9 +420,279 @@ function aggregateTracks(items) {
   );
 }
 
+function renderRecentTab() {
+  if (recentMode === "plays") {
+    const filtered = cachedHistory.filter((it) => matchesFilter(it, true));
+    if (filtered.length === 0) {
+      recentListEl.replaceChildren();
+      recentEmptyEl.hidden = false;
+      return;
+    }
+    recentEmptyEl.hidden = true;
+    const recentItems = [...filtered]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 30);
+    recentListEl.replaceChildren(
+      ...recentItems.map((item) => {
+        const timeStr = new Date(item.timestamp).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const tags = [];
+        if (item.isLoop) tags.push("🔁 Bucle");
+        if (item.category) tags.push(translateCategory(item.category));
+        if (item.contentType === "short") tags.push("Short");
+        if (item.contentType === "live") tags.push("Live");
+        if (item.playbackRate && item.playbackRate !== 1)
+          tags.push(`${item.playbackRate}x`);
+        if (item.mostlyMuted) tags.push("🔇");
+        if (item.imported) tags.push("Takeout");
+        const sub = `${item.artist} · ${timeStr}${tags.length ? " · " + tags.join(" · ") : ""}`;
+        const right = item.seconds > 0 ? formatClock(item.seconds) : "—";
+        return buildTrackRow(
+          item.isLoop ? "🔁" : "•",
+          item.artwork,
+          item.title,
+          sub,
+          right,
+          {
+            href: resolveVideoUrl(item) || undefined,
+          },
+        );
+      }),
+    );
+    return;
+  }
+
+  if (recentMode === "likes" || recentMode === "subs") {
+    const targetType = recentMode === "likes" ? "like" : "subscribe";
+    const items = cachedInteractions
+      .filter(
+        (it) => it.type === targetType && matchesPeriodAndSourceOnly(it, true),
+      )
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 30);
+
+    if (items.length === 0) {
+      recentListEl.replaceChildren();
+      recentEmptyEl.hidden = false;
+      return;
+    }
+    recentEmptyEl.hidden = true;
+    recentListEl.replaceChildren(
+      ...items.map((it) => {
+        const d = new Date(it.timestamp);
+        const dt = `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${d.toLocaleTimeString(
+          [],
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`;
+        const icon = targetType === "like" ? "❤️" : "🔔";
+        const cat = it.category ? ` · ${translateCategory(it.category)}` : "";
+        const href = targetType === "like" ? it.videoUrl : it.channelUrl;
+        return buildTrackRow(
+          icon,
+          it.artwork,
+          it.title,
+          `${it.artist} · ${dt}${cat}`,
+          "Abrir ↗",
+          {
+            href: href || undefined,
+            avatar: targetType === "subscribe",
+          },
+        );
+      }),
+    );
+    return;
+  }
+
+  if (recentMode === "searches") {
+    const items = cachedSearches
+      .filter((s) => matchesPeriodAndSourceOnly(s, true))
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 30);
+
+    if (items.length === 0) {
+      recentListEl.replaceChildren();
+      recentEmptyEl.hidden = false;
+      return;
+    }
+    recentEmptyEl.hidden = true;
+    recentListEl.replaceChildren(
+      ...items.map((s) => {
+        const d = new Date(s.timestamp);
+        const dt = `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${d.toLocaleTimeString(
+          [],
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`;
+        const src = s.source === "yt_music" ? "YT Music" : "YouTube";
+        return buildTrackRow("🔍", "", s.query, `${src} · ${dt}`, "Buscar ↗", {
+          href: s.url || undefined,
+        });
+      }),
+    );
+  }
+}
+
+function renderLikesTab() {
+  const likes = cachedInteractions
+    .filter((it) => it.type === "like" && matchesPeriodAndSourceOnly(it, true))
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  const subs = cachedInteractions
+    .filter(
+      (it) => it.type === "subscribe" && matchesPeriodAndSourceOnly(it, true),
+    )
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  const searches = cachedSearches
+    .filter((s) => matchesPeriodAndSourceOnly(s, true))
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  lkTotalLikesEl.textContent = `❤️ ${likes.length}`;
+  lkTotalSubsEl.textContent = `🔔 ${subs.length}`;
+  lkTotalSearchesEl.textContent = `🔍 ${searches.length}`;
+
+  if (likes.length === 0) {
+    likesListEl.replaceChildren();
+    likesEmptyEl.hidden = false;
+  } else {
+    likesEmptyEl.hidden = true;
+    likesListEl.replaceChildren(
+      ...likes.slice(0, 30).map((it) => {
+        const d = new Date(it.timestamp);
+        const dt = `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${d.toLocaleTimeString(
+          [],
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`;
+        const cat = it.category ? ` · ${translateCategory(it.category)}` : "";
+        return buildTrackRow(
+          "❤️",
+          it.artwork,
+          it.title,
+          `${it.artist} · ${dt}${cat}`,
+          "Abrir ↗",
+          {
+            href: it.videoUrl || undefined,
+          },
+        );
+      }),
+    );
+  }
+
+  if (subs.length === 0) {
+    subsListEl.replaceChildren();
+    subsEmptyEl.hidden = false;
+  } else {
+    subsEmptyEl.hidden = true;
+    subsListEl.replaceChildren(
+      ...subs.slice(0, 30).map((it) => {
+        const d = new Date(it.timestamp);
+        const dt = `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${d.toLocaleTimeString(
+          [],
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`;
+        return buildTrackRow(
+          "🔔",
+          it.artwork,
+          it.title,
+          `${it.artist} · ${dt}`,
+          "Canal ↗",
+          {
+            href: it.channelUrl || undefined,
+            avatar: true,
+          },
+        );
+      }),
+    );
+  }
+
+  if (searches.length === 0) {
+    socialSearchesListEl.replaceChildren();
+    socialSearchesEmptyEl.hidden = false;
+  } else {
+    socialSearchesEmptyEl.hidden = true;
+    socialSearchesListEl.replaceChildren(
+      ...searches.slice(0, 25).map((s) => {
+        const d = new Date(s.timestamp);
+        const dt = `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${d.toLocaleTimeString(
+          [],
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`;
+        const src = s.source === "yt_music" ? "YT Music" : "YouTube";
+        return buildTrackRow("🔍", "", s.query, `${src} · ${dt}`, "Buscar ↗", {
+          href: s.url || undefined,
+        });
+      }),
+    );
+  }
+}
+
+function renderSearchesStats() {
+  const filtered = cachedSearches.filter((s) =>
+    matchesPeriodAndSourceOnly(s, true),
+  );
+  if (filtered.length === 0) {
+    searchesBoxEl.hidden = true;
+    return;
+  }
+
+  searchesBoxEl.hidden = false;
+  const map = new Map();
+  for (const s of filtered) {
+    const cur = map.get(s.normalized) || {
+      query: s.query,
+      url: s.url,
+      source: s.source,
+      count: 0,
+    };
+    cur.count += 1;
+    if (s.url) cur.url = s.url;
+    map.set(s.normalized, cur);
+  }
+
+  const top = [...map.values()].sort((a, b) => b.count - a.count).slice(0, 8);
+  topSearchesListEl.replaceChildren(
+    ...top.map((s, idx) =>
+      buildTrackRow(
+        String(idx + 1),
+        "",
+        s.query,
+        s.source === "yt_music" ? "YT Music" : "YouTube",
+        `${s.count}x`,
+        { href: s.url || undefined },
+      ),
+    ),
+  );
+}
+
 function renderHistory(history) {
   cachedHistory = history;
   const filtered = history.filter((it) => matchesFilter(it, true));
+
+  const likesCount = cachedInteractions.filter(
+    (it) => it.type === "like" && matchesPeriodAndSourceOnly(it, true),
+  ).length;
+  const subsCount = cachedInteractions.filter(
+    (it) => it.type === "subscribe" && matchesPeriodAndSourceOnly(it, true),
+  ).length;
+  const searchesCount = cachedSearches.filter((s) =>
+    matchesPeriodAndSourceOnly(s, true),
+  ).length;
 
   if (filtered.length === 0) {
     totalTimeEl.textContent = "0 min";
@@ -359,16 +705,14 @@ function renderHistory(history) {
     makePlaylistBtn.hidden = true;
     summaryCardData = null;
     topListEl.replaceChildren();
-    recentListEl.replaceChildren();
     topArtistsListEl.replaceChildren();
     hoursChartEl.replaceChildren();
     breakdownStatsEl.replaceChildren();
+    categoriesBoxEl.hidden = true;
     albumsBoxEl.hidden = true;
     emptyMsgEl.hidden = false;
-    recentEmptyEl.hidden = false;
   } else {
     emptyMsgEl.hidden = true;
-    recentEmptyEl.hidden = true;
 
     let totalSeconds = 0;
     let totalLoops = 0;
@@ -376,6 +720,7 @@ function renderHistory(history) {
     let rateCount = 0;
     const formatCounts = { video: 0, music: 0, short: 0, live: 0 };
     const contextCounts = { direct: 0, mix: 0, playlist: 0 };
+    const categoriesMap = new Map();
     const artistsMap = new Map();
     const albumsMap = new Map();
     const hoursBuckets = new Array(24).fill(0);
@@ -390,6 +735,15 @@ function renderHistory(history) {
 
       const ctx = item.context || "direct";
       contextCounts[ctx] = (contextCounts[ctx] || 0) + 1;
+
+      const catKey =
+        item.category || (item.source === "yt_music" ? "Music" : "");
+      if (catKey) {
+        const curCat = categoriesMap.get(catKey) || { plays: 0, seconds: 0 };
+        curCat.plays += 1;
+        curCat.seconds += item.seconds || 0;
+        categoriesMap.set(catKey, curCat);
+      }
 
       if (item.playbackRate) {
         rateSum += item.playbackRate;
@@ -489,37 +843,48 @@ function renderHistory(history) {
       }),
     );
 
-    const recentItems = [...filtered]
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 25);
-    recentListEl.replaceChildren(
-      ...recentItems.map((item) => {
-        const timeStr = new Date(item.timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-        const tags = [];
-        if (item.isLoop) tags.push("🔁 Bucle");
-        if (item.contentType === "short") tags.push("Short");
-        if (item.contentType === "live") tags.push("Live");
-        if (item.playbackRate && item.playbackRate !== 1)
-          tags.push(`${item.playbackRate}x`);
-        if (item.mostlyMuted) tags.push("🔇");
-        if (item.imported) tags.push("Takeout");
-        const sub = `${item.artist} · ${timeStr}${tags.length ? " · " + tags.join(" · ") : ""}`;
-        const right = item.seconds > 0 ? formatClock(item.seconds) : "—";
-        return buildTrackRow(
-          item.isLoop ? "🔁" : "•",
-          item.artwork,
-          item.title,
-          sub,
-          right,
-          {
-            href: resolveVideoUrl(item) || undefined,
-          },
-        );
-      }),
+    const catEntries = [...categoriesMap.entries()].sort(
+      (a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays,
     );
+    if (catEntries.length > 0) {
+      categoriesBoxEl.hidden = false;
+      const totalCatWeight = catEntries.reduce(
+        (acc, [, st]) => acc + (st.seconds || st.plays),
+        0,
+      );
+      categoriesListEl.replaceChildren(
+        ...catEntries.slice(0, 6).map(([rawCat, st]) => {
+          const weight = st.seconds || st.plays;
+          const pct =
+            totalCatWeight > 0
+              ? Math.max(4, Math.round((weight / totalCatWeight) * 100))
+              : 0;
+
+          const row = document.createElement("div");
+          row.className = "cat-row";
+
+          const top = document.createElement("div");
+          top.className = "cat-row-top";
+          const lbl = document.createElement("span");
+          lbl.textContent = translateCategory(rawCat);
+          const meta = document.createElement("span");
+          meta.textContent = `${pct}% · ${st.plays}x (${formatDuration(st.seconds)})`;
+          top.append(lbl, meta);
+
+          const track = document.createElement("div");
+          track.className = "cat-track";
+          const fill = document.createElement("div");
+          fill.className = "cat-fill";
+          fill.style.width = `${pct}%`;
+          track.append(fill);
+
+          row.append(top, track);
+          return row;
+        }),
+      );
+    } else {
+      categoriesBoxEl.hidden = true;
+    }
 
     const bars = hoursBuckets.map((sec, h) => {
       const bar = document.createElement("div");
@@ -546,6 +911,9 @@ function renderHistory(history) {
         (contextCounts.mix || 0) + (contextCounts.playlist || 0),
       ],
       ["Vel. promedio", avgRate],
+      ["❤️ Me gusta", likesCount],
+      ["🔍 Búsquedas", searchesCount],
+      ["🔔 Suscrip.", subsCount],
     ];
     breakdownStatsEl.replaceChildren(
       ...chips.map(([label, val]) => {
@@ -597,6 +965,9 @@ function renderHistory(history) {
     );
   }
 
+  renderRecentTab();
+  renderLikesTab();
+  renderSearchesStats();
   renderSkips();
   renderCalendar();
   renderChannels();
@@ -645,9 +1016,12 @@ function renderSkips() {
 
 function renderChannels() {
   const filteredVisits = cachedChannelVisits.filter((it) =>
-    matchesFilter(it, true),
+    matchesPeriodAndSourceOnly(it, true),
   );
   const filteredPlays = cachedHistory.filter((it) => matchesFilter(it, true));
+  const newSubsCount = cachedInteractions.filter(
+    (it) => it.type === "subscribe" && matchesPeriodAndSourceOnly(it, true),
+  ).length;
 
   const channelsMap = new Map();
 
@@ -690,13 +1064,7 @@ function renderChannels() {
 
   chUniqueCountEl.textContent = String(ranked.length);
   chTotalVisitsEl.textContent = String(filteredVisits.length);
-
-  const topVisited = [...channelsMap.values()]
-    .filter((c) => c.visits > 0)
-    .sort((a, b) => b.visits - a.visits || b.lastVisited - a.lastVisited)[0];
-  chTopNameEl.textContent = topVisited
-    ? `${topVisited.name} (${topVisited.visits})`
-    : "—";
+  chNewSubsEl.textContent = `🔔 ${newSubsCount}`;
 
   if (ranked.length === 0) {
     channelsTopListEl.replaceChildren();
@@ -765,13 +1133,32 @@ function renderChannels() {
 }
 
 function renderCalendar() {
-  const sourceItems = cachedHistory.filter((it) => matchesFilter(it, false));
+  const sourcePlays = cachedHistory.filter((it) => matchesFilter(it, false));
+  const sourceInteractions = cachedInteractions.filter((it) =>
+    matchesPeriodAndSourceOnly(it, false),
+  );
+  const sourceSearches = cachedSearches.filter((s) =>
+    matchesPeriodAndSourceOnly(s, false),
+  );
 
-  const byDateMap = new Map();
-  for (const item of sourceItems) {
+  const playsByDate = new Map();
+  const interByDate = new Map();
+  const searchesByDate = new Map();
+
+  for (const item of sourcePlays) {
     const key = toDateKey(new Date(item.timestamp));
-    if (!byDateMap.has(key)) byDateMap.set(key, []);
-    byDateMap.get(key).push(item);
+    if (!playsByDate.has(key)) playsByDate.set(key, []);
+    playsByDate.get(key).push(item);
+  }
+  for (const it of sourceInteractions) {
+    const key = toDateKey(new Date(it.timestamp));
+    if (!interByDate.has(key)) interByDate.set(key, []);
+    interByDate.get(key).push(it);
+  }
+  for (const s of sourceSearches) {
+    const key = toDateKey(new Date(s.timestamp));
+    if (!searchesByDate.has(key)) searchesByDate.set(key, []);
+    searchesByDate.get(key).push(s);
   }
 
   const monthDate = new Date(calYear, calMonth, 1);
@@ -812,14 +1199,31 @@ function renderCalendar() {
   calGrid.replaceChildren(
     ...cells.map(({ date, otherMonth }) => {
       const key = toDateKey(date);
+      const dayPlays = playsByDate.get(key) || [];
+      const dayInter = interByDate.get(key) || [];
+      const daySearch = searchesByDate.get(key) || [];
+      const hasAny =
+        dayPlays.length > 0 || dayInter.length > 0 || daySearch.length > 0;
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "cal-day";
       btn.textContent = String(date.getDate());
       if (otherMonth) btn.classList.add("other-month");
       if (key === todayKey) btn.classList.add("today");
-      if (byDateMap.has(key)) btn.classList.add("has-activity");
+      if (hasAny) {
+        btn.classList.add("has-activity");
+        const lk = dayInter.filter((x) => x.type === "like").length;
+        const sb = dayInter.filter((x) => x.type === "subscribe").length;
+        const tips = [];
+        if (dayPlays.length) tips.push(`${dayPlays.length} rep.`);
+        if (lk) tips.push(`❤️ ${lk}`);
+        if (sb) tips.push(`🔔 ${sb}`);
+        if (daySearch.length) tips.push(`🔍 ${daySearch.length}`);
+        btn.title = tips.join(" · ");
+      }
       if (key === selectedDateKey) btn.classList.add("selected");
+
       btn.addEventListener("click", () => {
         selectedDateKey = key;
         if (otherMonth) {
@@ -832,6 +1236,7 @@ function renderCalendar() {
     }),
   );
 
+  // Detalle del día seleccionado
   const [sy, sm, sd] = selectedDateKey.split("-").map(Number);
   const selDateObj = new Date(sy, sm - 1, sd);
   const formattedDay = new Intl.DateTimeFormat("es-AR", {
@@ -840,61 +1245,146 @@ function renderCalendar() {
     month: "long",
   }).format(selDateObj);
 
-  const dayItems = (byDateMap.get(selectedDateKey) || [])
-    .slice()
-    .sort((a, b) => b.timestamp - a.timestamp);
-  const dayTotalSec = dayItems.reduce((acc, it) => acc + (it.seconds || 0), 0);
+  const dayPlays = playsByDate.get(selectedDateKey) || [];
+  const dayInter = interByDate.get(selectedDateKey) || [];
+  const dayLikes = dayInter.filter((x) => x.type === "like");
+  const daySubs = dayInter.filter((x) => x.type === "subscribe");
+  const daySearches = searchesByDate.get(selectedDateKey) || [];
+
+  const dayTotalSec = dayPlays.reduce((acc, it) => acc + (it.seconds || 0), 0);
+  const dayMetaParts = [];
+  if (dayPlays.length > 0)
+    dayMetaParts.push(`${formatDuration(dayTotalSec)} (${dayPlays.length}x)`);
+  if (dayLikes.length > 0) dayMetaParts.push(`❤️ ${dayLikes.length}`);
+  if (daySubs.length > 0) dayMetaParts.push(`🔔 ${daySubs.length}`);
+  if (daySearches.length > 0) dayMetaParts.push(`🔍 ${daySearches.length}`);
 
   calDayTitle.textContent =
-    dayItems.length > 0
-      ? `${formattedDay} · ${formatDuration(dayTotalSec)} (${dayItems.length}x)`
+    dayMetaParts.length > 0
+      ? `${formattedDay} · ${dayMetaParts.join(" · ")}`
       : formattedDay;
 
-  if (dayItems.length === 0) {
+  const combinedDay = [];
+  if (calDayMode === "all" || calDayMode === "plays") {
+    for (const p of dayPlays)
+      combinedDay.push({ kind: "play", ts: p.timestamp, data: p });
+  }
+  if (calDayMode === "all" || calDayMode === "likes") {
+    for (const lk of dayLikes)
+      combinedDay.push({ kind: "like", ts: lk.timestamp, data: lk });
+  }
+  if (calDayMode === "all" || calDayMode === "subs") {
+    for (const sb of daySubs)
+      combinedDay.push({ kind: "sub", ts: sb.timestamp, data: sb });
+  }
+  if (calDayMode === "all" || calDayMode === "searches") {
+    for (const sr of daySearches)
+      combinedDay.push({ kind: "search", ts: sr.timestamp, data: sr });
+  }
+
+  combinedDay.sort((a, b) => b.ts - a.ts);
+
+  if (combinedDay.length === 0) {
     calDayList.replaceChildren();
     calDayEmpty.hidden = false;
   } else {
     calDayEmpty.hidden = true;
     calDayList.replaceChildren(
-      ...dayItems.map((item) => {
-        const timeStr = new Date(item.timestamp).toLocaleTimeString([], {
+      ...combinedDay.map((entry) => {
+        const timeStr = new Date(entry.ts).toLocaleTimeString([], {
           hour: "2-digit",
           minute: "2-digit",
         });
-        const sub = `${item.artist} · ${timeStr}${item.isLoop ? " · 🔁 Bucle" : ""}`;
-        const right = item.seconds > 0 ? formatClock(item.seconds) : "Takeout";
+        const d = entry.data;
+        if (entry.kind === "play") {
+          const sub = `${d.artist} · ${timeStr}${d.isLoop ? " · 🔁 Bucle" : ""}`;
+          const right = d.seconds > 0 ? formatClock(d.seconds) : "Takeout";
+          return buildTrackRow(
+            d.isLoop ? "🔁" : "•",
+            d.artwork,
+            d.title,
+            sub,
+            right,
+            {
+              href: resolveVideoUrl(d) || undefined,
+            },
+          );
+        }
+        if (entry.kind === "like") {
+          return buildTrackRow(
+            "❤️",
+            d.artwork,
+            d.title,
+            `${d.artist} · ${timeStr} · Me gusta`,
+            "Abrir ↗",
+            {
+              href: d.videoUrl || undefined,
+            },
+          );
+        }
+        if (entry.kind === "sub") {
+          return buildTrackRow(
+            "🔔",
+            d.artwork,
+            d.title,
+            `Suscripción nueva · ${timeStr}`,
+            "Canal ↗",
+            {
+              href: d.channelUrl || undefined,
+              avatar: true,
+            },
+          );
+        }
         return buildTrackRow(
-          item.isLoop ? "🔁" : "•",
-          item.artwork,
-          item.title,
-          sub,
-          right,
+          "🔍",
+          "",
+          d.query,
+          `Búsqueda · ${timeStr}`,
+          "Buscar ↗",
           {
-            href: resolveVideoUrl(item) || undefined,
+            href: d.url || undefined,
           },
         );
       }),
     );
   }
 
-  const monthItems = sourceItems.filter((item) => {
+  // Datos del mes seleccionado
+  const monthPlays = sourcePlays.filter((item) => {
     const d = new Date(item.timestamp);
     return d.getFullYear() === calYear && d.getMonth() === calMonth;
   });
+  const monthInter = sourceInteractions
+    .filter((it) => {
+      const d = new Date(it.timestamp);
+      return d.getFullYear() === calYear && d.getMonth() === calMonth;
+    })
+    .sort((a, b) => b.timestamp - a.timestamp);
 
-  // Top del mes
-  const monthTotalSec = monthItems.reduce(
+  const monthLikesCount = monthInter.filter((x) => x.type === "like").length;
+  const monthSubsCount = monthInter.filter(
+    (x) => x.type === "subscribe",
+  ).length;
+
+  const monthTotalSec = monthPlays.reduce(
     (acc, it) => acc + (it.seconds || 0),
     0,
   );
-  const monthLoops = monthItems.filter((it) => it.isLoop).length;
+  const monthLoops = monthPlays.filter((it) => it.isLoop).length;
+
+  const monthMeta = [];
+  if (monthPlays.length > 0)
+    monthMeta.push(`${formatDuration(monthTotalSec)} (${monthPlays.length}x)`);
+  if (monthLoops > 0) monthMeta.push(`🔁${monthLoops}`);
+  if (monthLikesCount > 0) monthMeta.push(`❤️${monthLikesCount}`);
+  if (monthSubsCount > 0) monthMeta.push(`🔔${monthSubsCount}`);
 
   calMonthTopTitle.textContent =
-    monthItems.length > 0
-      ? `Top de ${rawMonthWord} · ${formatDuration(monthTotalSec)} (${monthItems.length}x${monthLoops > 0 ? ` · 🔁${monthLoops}` : ""})`
+    monthMeta.length > 0
+      ? `Top de ${rawMonthWord} · ${monthMeta.join(" · ")}`
       : `Top de ${rawMonthWord}`;
 
-  if (monthItems.length === 0) {
+  if (monthPlays.length === 0) {
     currentMonthTopVideoIds = [];
     monthCardData = null;
     calMonthImgBtn.hidden = true;
@@ -903,7 +1393,7 @@ function renderCalendar() {
     calMonthTopEmpty.hidden = false;
   } else {
     calMonthTopEmpty.hidden = true;
-    const topMonth = aggregateTracks(monthItems);
+    const topMonth = aggregateTracks(monthPlays);
     currentMonthTopVideoIds = topMonth
       .map((t) => t.videoId)
       .filter(Boolean)
@@ -911,7 +1401,7 @@ function renderCalendar() {
     calMonthPlaylistBtn.hidden = currentMonthTopVideoIds.length === 0;
 
     const monthArtists = new Map();
-    for (const it of monthItems) {
+    for (const it of monthPlays) {
       const k = it.artist || "YouTube";
       monthArtists.set(k, (monthArtists.get(k) || 0) + (it.seconds || 1));
     }
@@ -921,7 +1411,7 @@ function renderCalendar() {
       subtitle: `${rawMonthWord.toUpperCase()} ${calYear}`,
       topTracks: topMonth.slice(0, 5),
       totalSeconds: monthTotalSec,
-      totalPlays: monthItems.length,
+      totalPlays: monthPlays.length,
       totalLoops: monthLoops,
       topArtist: topMonthArtist,
     };
@@ -951,6 +1441,38 @@ function renderCalendar() {
     );
   }
 
+  // Bloque mensual de Me gusta y Suscripciones
+  if (monthInter.length === 0) {
+    calMonthSocialBox.hidden = true;
+  } else {
+    calMonthSocialBox.hidden = false;
+    calMonthSocialTitle.textContent = `Me gusta y suscripciones de ${rawMonthWord}`;
+    calMonthSocialList.replaceChildren(
+      ...monthInter.slice(0, 20).map((it) => {
+        const d = new Date(it.timestamp);
+        const dt = `${d.toLocaleDateString([], { day: "2-digit", month: "2-digit" })} ${d.toLocaleTimeString(
+          [],
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          },
+        )}`;
+        const isLike = it.type === "like";
+        return buildTrackRow(
+          isLike ? "❤️" : "🔔",
+          it.artwork,
+          it.title,
+          `${isLike ? it.artist : "Suscripción nueva"} · ${dt}`,
+          "Abrir ↗",
+          {
+            href: (isLike ? it.videoUrl : it.channelUrl) || undefined,
+            avatar: !isLike,
+          },
+        );
+      }),
+    );
+  }
+
   // Top por semana
   const weekRanges = [
     { num: 1, start: 1, end: 7 },
@@ -963,7 +1485,7 @@ function renderCalendar() {
 
   calWeeksList.replaceChildren(
     ...weekRanges.map((w) => {
-      const wItems = monthItems.filter((item) => {
+      const wItems = monthPlays.filter((item) => {
         const day = new Date(item.timestamp).getDate();
         return day >= w.start && day <= w.end;
       });
@@ -1285,7 +1807,7 @@ calMonthImgBtn.addEventListener("click", () =>
   exportRecapPng(monthCardData, calMonthImgBtn),
 );
 
-// --- GENERADOR DE ZIP NATIVO EN JS PURO (STORE) ---
+// --- GENERADOR DE ZIP NATIVO EN JS PURO ---
 const CRC32_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -1417,10 +1939,14 @@ exportBtn.addEventListener("click", async () => {
       history = [],
       channelVisits = [],
       skips = [],
+      interactions = [],
+      searches = [],
     } = await chrome.storage.local.get({
       history: [],
       channelVisits: [],
       skips: [],
+      interactions: [],
+      searches: [],
     });
 
     const imageTasks = [];
@@ -1440,15 +1966,19 @@ exportBtn.addEventListener("click", async () => {
       imageTasks.push({ url, folder, slug: uniqueSlug });
     }
 
-    for (const item of history) {
+    for (const item of history)
       queueImage(item.artwork, "imagenes/portadas", item.videoId || item.title);
-    }
-    for (const ch of channelVisits) {
+    for (const ch of channelVisits)
       queueImage(ch.avatar, "imagenes/canales", ch.name || ch.channelKey);
+    for (const it of interactions) {
+      queueImage(
+        it.artwork,
+        it.type === "subscribe" ? "imagenes/canales" : "imagenes/portadas",
+        it.title,
+      );
     }
-    for (const sk of skips) {
+    for (const sk of skips)
       queueImage(sk.artwork, "imagenes/portadas", sk.videoId || sk.title);
-    }
 
     const zipFiles = [];
     const imageMap = {};
@@ -1469,7 +1999,7 @@ exportBtn.addEventListener("click", async () => {
             zipFiles.push({ name: filePath, data: buf });
             imageMap[task.url] = filePath;
           } catch {
-            // Ignorar si alguna imagen falló
+            // Ignorar si falla
           } finally {
             doneCount += 1;
             exportBtn.textContent = `⏳ ${doneCount}/${imageTasks.length}`;
@@ -1493,6 +2023,8 @@ exportBtn.addEventListener("click", async () => {
       history,
       channelVisits,
       skips,
+      interactions,
+      searches,
       imageMap,
     };
     const jsonBytes = new TextEncoder().encode(
@@ -1550,7 +2082,10 @@ function parseTakeoutJson(entries) {
 
     const rawTitle = String(item.title || "");
     const cleanTitle = rawTitle
-      .replace(/^(Watched|Has visto|Viste|Escuchaste|Listened to)\s+/i, "")
+      .replace(
+        /^(Watched|Has visto|Viste|Miraste|Escuchaste|Listened to)\s+/i,
+        "",
+      )
       .trim();
     if (!cleanTitle) continue;
 
@@ -1569,6 +2104,7 @@ function parseTakeoutJson(entries) {
       title: cleanTitle,
       artist,
       album: "",
+      category: isYtMusic ? "Music" : "",
       artwork: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       channelUrl,
       source: isYtMusic ? "yt_music" : "youtube",
@@ -1607,6 +2143,8 @@ importInput.addEventListener("change", async (e) => {
       history: [],
       channelVisits: [],
       skips: [],
+      interactions: [],
+      searches: [],
     });
 
     let addedCount = 0;
@@ -1626,39 +2164,32 @@ importInput.addEventListener("change", async (e) => {
         `✓ Importadas ${addedCount} reproducciones de Google Takeout.`,
       );
     } else if (parsed && Array.isArray(parsed.history)) {
-      const existingIds = new Set(data.history.map((h) => h.id));
-      for (const it of parsed.history) {
-        if (it?.id && !existingIds.has(it.id)) {
-          data.history.push(it);
-          existingIds.add(it.id);
-          addedCount += 1;
-        }
-      }
-
-      if (Array.isArray(parsed.channelVisits)) {
-        const chIds = new Set(data.channelVisits.map((c) => c.id));
-        for (const c of parsed.channelVisits) {
-          if (c?.id && !chIds.has(c.id)) {
-            data.channelVisits.push(c);
-            chIds.add(c.id);
+      const mergeUnique = (target, incoming) => {
+        if (!Array.isArray(incoming)) return 0;
+        const ids = new Set(target.map((x) => x.id));
+        let n = 0;
+        for (const item of incoming) {
+          if (item?.id && !ids.has(item.id)) {
+            target.push(item);
+            ids.add(item.id);
+            n += 1;
           }
         }
-      }
+        return n;
+      };
 
-      if (Array.isArray(parsed.skips)) {
-        const skIds = new Set(data.skips.map((s) => s.id));
-        for (const s of parsed.skips) {
-          if (s?.id && !skIds.has(s.id)) {
-            data.skips.push(s);
-            skIds.add(s.id);
-          }
-        }
-      }
+      addedCount += mergeUnique(data.history, parsed.history);
+      mergeUnique(data.channelVisits, parsed.channelVisits);
+      mergeUnique(data.skips, parsed.skips);
+      mergeUnique(data.interactions, parsed.interactions);
+      mergeUnique(data.searches, parsed.searches);
 
       await chrome.storage.local.set({
         history: data.history,
         channelVisits: data.channelVisits,
         skips: data.skips,
+        interactions: data.interactions,
+        searches: data.searches,
       });
       showImportMessage(`✓ Backup restaurado (+${addedCount} reproducciones).`);
     } else {
@@ -1683,6 +2214,30 @@ makePlaylistBtn.addEventListener("click", () => {
 
 calMonthPlaylistBtn.addEventListener("click", () => {
   openInstantPlaylist(currentMonthTopVideoIds);
+});
+
+// Sub-filtros de Reciente
+document.querySelectorAll(".sub-pill[data-recent]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document
+      .querySelectorAll(".sub-pill[data-recent]")
+      .forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    recentMode = btn.dataset.recent;
+    renderRecentTab();
+  });
+});
+
+// Sub-filtros dentro de Calendario (detalle del día)
+document.querySelectorAll(".cal-pill[data-calday]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document
+      .querySelectorAll(".cal-pill[data-calday]")
+      .forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    calDayMode = btn.dataset.calday;
+    renderCalendar();
+  });
 });
 
 // Navegación del calendario
@@ -1714,7 +2269,7 @@ calTodayBtn.addEventListener("click", () => {
   renderCalendar();
 });
 
-// Tabs
+// Tabs principales
 document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     document
@@ -1737,15 +2292,23 @@ async function init() {
     history = [],
     channelVisits = [],
     skips = [],
+    interactions = [],
+    searches = [],
     nowPlaying = null,
   } = await chrome.storage.local.get({
     history: [],
     channelVisits: [],
     skips: [],
+    interactions: [],
+    searches: [],
     nowPlaying: null,
   });
+
   cachedChannelVisits = channelVisits;
   cachedSkips = skips;
+  cachedInteractions = interactions;
+  cachedSearches = searches;
+
   renderNowPlaying(nowPlaying);
   renderHistory(history);
 
@@ -1767,6 +2330,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
     cachedSkips = changes.skips.newValue || [];
     renderSkips();
   }
+  if (changes.interactions) {
+    cachedInteractions = changes.interactions.newValue || [];
+    renderHistory(cachedHistory);
+  }
+  if (changes.searches) {
+    cachedSearches = changes.searches.newValue || [];
+    renderHistory(cachedHistory);
+  }
   if (changes.history) {
     renderHistory(changes.history.newValue || []);
   }
@@ -1778,13 +2349,15 @@ sourceSelect.addEventListener("change", init);
 clearBtn.addEventListener("click", async () => {
   if (
     confirm(
-      "¿Seguro que querés borrar todo el historial, skips y visitas a canales?",
+      "¿Seguro que querés borrar todo el historial, búsquedas, likes, skips y canales?",
     )
   ) {
     await chrome.storage.local.set({
       history: [],
       channelVisits: [],
       skips: [],
+      interactions: [],
+      searches: [],
     });
   }
 });

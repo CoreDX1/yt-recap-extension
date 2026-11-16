@@ -57,6 +57,12 @@
                             <span id="npSourceBadge" class="badge source"
                                 >YouTube</span
                             >
+                            <span
+                                id="npCategoryBadge"
+                                class="badge category"
+                                hidden
+                                >Música</span
+                            >
                             <span id="npFormatBadge" class="badge format" hidden
                                 >Short</span
                             >
@@ -105,9 +111,10 @@
                     Resumen
                 </button>
                 <button class="tab-btn" data-tab="recent">Reciente</button>
-                <button class="tab-btn" data-tab="activity">Horarios</button>
+                <button class="tab-btn" data-tab="activity">Stats</button>
                 <button class="tab-btn" data-tab="calendar">Calendario</button>
                 <button class="tab-btn" data-tab="channels">Canales</button>
+                <button class="tab-btn" data-tab="likes">Likes</button>
             </nav>
         </header>
 
@@ -172,14 +179,31 @@
 
         <!-- TAB 2: RECIENTE -->
         <main id="tab-recent" class="tab-panel" hidden>
+            <div class="sub-pills">
+                <button class="sub-pill active" data-recent="plays">
+                    ▶ Reproducciones
+                </button>
+                <button class="sub-pill" data-recent="likes">
+                    ❤️ Me gusta
+                </button>
+                <button class="sub-pill" data-recent="searches">
+                    🔍 Búsquedas
+                </button>
+                <button class="sub-pill" data-recent="subs">🔔 Suscrip.</button>
+            </div>
             <ul id="recentList" class="top-list tall"></ul>
             <p id="recentEmpty" class="empty-msg" hidden>
-                Sin reproducciones recientes.
+                Sin actividad reciente en esta categoría.
             </p>
         </main>
 
-        <!-- TAB 3: HORARIOS Y DETALLES -->
+        <!-- TAB 3: STATS -->
         <main id="tab-activity" class="tab-panel" hidden>
+            <section id="categoriesBox" class="activity-box" hidden>
+                <h2>Categorías / Géneros</h2>
+                <div id="categoriesList" class="cat-bars"></div>
+            </section>
+
             <section class="activity-box">
                 <h2>Actividad por hora del día (00h – 23h)</h2>
                 <div id="hoursChart" class="hours-chart"></div>
@@ -193,8 +217,13 @@
             </section>
 
             <section class="activity-box">
-                <h2>Formatos, origen y velocidad</h2>
+                <h2>Formatos, origen e interacciones</h2>
                 <div id="breakdownStats" class="breakdown-grid"></div>
+            </section>
+
+            <section id="searchesBox" class="activity-box" hidden>
+                <h2>Top Búsquedas</h2>
+                <ul id="topSearchesList" class="top-list compact"></ul>
             </section>
 
             <section id="albumsBox" class="activity-box" hidden>
@@ -213,7 +242,7 @@
             </section>
         </main>
 
-        <!-- TAB 4: CALENDARIO, TOP DEL MES Y TOP SEMANAL -->
+        <!-- TAB 4: CALENDARIO, TOP DEL MES, LIKES/SUBS DEL MES Y TOP SEMANAL -->
         <main id="tab-calendar" class="tab-panel" hidden>
             <section class="calendar-box">
                 <div class="cal-header">
@@ -253,6 +282,23 @@
 
             <section class="cal-section">
                 <h2 id="calDayTitle">Actividad del día</h2>
+                <div id="calDayFilters" class="sub-pills">
+                    <button class="cal-pill sub-pill active" data-calday="all">
+                        Todo
+                    </button>
+                    <button class="cal-pill sub-pill" data-calday="plays">
+                        ▶ Reprod.
+                    </button>
+                    <button class="cal-pill sub-pill" data-calday="likes">
+                        ❤️ Likes
+                    </button>
+                    <button class="cal-pill sub-pill" data-calday="subs">
+                        🔔 Suscrip.
+                    </button>
+                    <button class="cal-pill sub-pill" data-calday="searches">
+                        🔍 Búsquedas
+                    </button>
+                </div>
                 <ul id="calDayList" class="top-list compact"></ul>
                 <p id="calDayEmpty" class="empty-msg small" hidden>
                     No se registró actividad en esta fecha.
@@ -283,8 +329,15 @@
                 </div>
                 <ul id="calMonthTopList" class="top-list compact"></ul>
                 <p id="calMonthTopEmpty" class="empty-msg small" hidden>
-                    Sin actividad en este mes.
+                    Sin reproducciones en este mes.
                 </p>
+            </section>
+
+            <section id="calMonthSocialBox" class="cal-section" hidden>
+                <h2 id="calMonthSocialTitle">
+                    Me gusta y suscripciones del mes
+                </h2>
+                <ul id="calMonthSocialList" class="top-list compact"></ul>
             </section>
 
             <section class="cal-section">
@@ -305,8 +358,8 @@
                     <strong id="chTotalVisits">0</strong>
                 </div>
                 <div class="stat-card">
-                    <span class="stat-label">Más visitado</span>
-                    <strong id="chTopName">—</strong>
+                    <span class="stat-label">Suscrip. nuevas</span>
+                    <strong id="chNewSubs">🔔 0</strong>
                 </div>
             </section>
 
@@ -325,6 +378,48 @@
                 <p id="channelsRecentEmpty" class="empty-msg small" hidden>
                     Entrá a la página de cualquier canal en YouTube para
                     registrarlo aquí.
+                </p>
+            </section>
+        </main>
+
+        <!-- TAB 6: LIKES, SUSCRIPCIONES Y BÚSQUEDAS -->
+        <main id="tab-likes" class="tab-panel" hidden>
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Me gusta</span>
+                    <strong id="lkTotalLikes">❤️ 0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Suscrip. nuevas</span>
+                    <strong id="lkTotalSubs">🔔 0</strong>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Búsquedas</span>
+                    <strong id="lkTotalSearches">🔍 0</strong>
+                </div>
+            </section>
+
+            <section class="cal-section">
+                <h2>❤️ Videos y canciones con Me gusta</h2>
+                <ul id="likesList" class="top-list compact"></ul>
+                <p id="likesEmpty" class="empty-msg small" hidden>
+                    Todavía no diste Me gusta a ningún video en este período.
+                </p>
+            </section>
+
+            <section class="cal-section">
+                <h2>🔔 Nuevas suscripciones</h2>
+                <ul id="subsList" class="top-list compact"></ul>
+                <p id="subsEmpty" class="empty-msg small" hidden>
+                    Todavía no registraste nuevas suscripciones en este período.
+                </p>
+            </section>
+
+            <section class="cal-section">
+                <h2>🔍 Últimas búsquedas</h2>
+                <ul id="socialSearchesList" class="top-list compact"></ul>
+                <p id="socialSearchesEmpty" class="empty-msg small" hidden>
+                    Sin búsquedas registradas en este período.
                 </p>
             </section>
         </main>

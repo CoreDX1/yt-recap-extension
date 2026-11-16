@@ -12,6 +12,10 @@
 
   let currentChannelVisit = null;
   let pendingChannel = null;
+  let activeSearchKey = null;
+
+  const categoryCache = new Map();
+  const fetchingCategories = new Set();
 
   function isContextValid() {
     return Boolean(
@@ -90,6 +94,67 @@
     return `https://www.youtube.com/watch?v=${videoId}`;
   }
 
+  function resolveVideoCategory(videoId) {
+    if (isMusic) return "Music";
+    if (!videoId) return "";
+    if (categoryCache.has(videoId)) return categoryCache.get(videoId);
+
+    const micro = document.querySelector(
+      "#microformat, ytd-player-microformat-renderer",
+    );
+    if (micro) {
+      const microId =
+        micro
+          .querySelector('meta[itemprop="identifier"]')
+          ?.getAttribute("content") || "";
+      const microUrl =
+        micro
+          .querySelector('link[itemprop="url"], meta[itemprop="embedUrl"]')
+          ?.getAttribute("href") ||
+        micro
+          .querySelector('meta[itemprop="embedUrl"]')
+          ?.getAttribute("content") ||
+        "";
+      const microGenre =
+        micro
+          .querySelector('meta[itemprop="genre"]')
+          ?.getAttribute("content") || "";
+
+      const matchesCurrent =
+        (microId && microId === videoId) ||
+        (microUrl && microUrl.includes(videoId));
+      if (microGenre && matchesCurrent) {
+        categoryCache.set(videoId, microGenre);
+        return microGenre;
+      }
+    }
+
+    // Si navegamos en SPA y el microformat aún está viejo, consultarlo una vez para ese videoId
+    if (!fetchingCategories.has(videoId)) {
+      fetchingCategories.add(videoId);
+      fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`, {
+        credentials: "omit",
+      })
+        .then((r) => (r.ok ? r.text() : ""))
+        .then((html) => {
+          if (!html) return;
+          const m = html.match(/"category"\s*:\s*"([^"]+)"/);
+          if (m && m[1]) {
+            const cat = m[1].replace(/\\u0026/g, "&");
+            categoryCache.set(videoId, cat);
+            if (currentSession && currentSession.videoId === videoId) {
+              currentSession.category = cat;
+              upsertSession(currentSession, true);
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => fetchingCategories.delete(videoId));
+    }
+
+    return "";
+  }
+
   function getActiveVideo() {
     const all = [...document.querySelectorAll("video")];
     const playing = all.find((v) => !v.paused && !v.ended && v.readyState >= 2);
@@ -107,6 +172,7 @@
     const videoId = extractVideoId();
     const contentType = detectContentType();
     const { context, playlistId } = detectPlaybackContext();
+    const category = resolveVideoCategory(videoId);
 
     const meta = navigator.mediaSession?.metadata;
     const metaTitle = meta?.title?.trim() || "";
@@ -177,6 +243,7 @@
       title,
       artist,
       album,
+      category,
       artwork,
       channelUrl,
       contentType,
@@ -185,6 +252,177 @@
       source,
     };
   }
+
+  // --- BÚSQUEDAS ---
+  function handleSearchTracking() {
+    let query = "";
+    if (!isMusic && location.pathname === "/results") {
+      query =
+        new URLSearchParams(location.search).get("search_query")?.trim() || "";
+    } else if (isMusic && location.pathname === "/search") {
+      query = new URLSearchParams(location.search).get("q")?.trim() || "";
+    }
+
+    if (!query) {
+      activeSearchKey = null;
+      return;
+    }
+
+    const key = `${source}::${query.toLowerCase()}`;
+    if (activeSearchKey === key) return;
+    activeSearchKey = key;
+
+    const searchEntry = {
+      id: `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      query,
+      normalized: query.toLowerCase(),
+      url: location.href,
+      source,
+      timestamp: Date.now(),
+    };
+
+    enqueueStorage(async () => {
+      if (stopIfInvalid()) return;
+      const data = await chrome.storage.local.get({ searches: [] });
+      const searches = Array.isArray(data.searches) ? data.searches : [];
+      const lastSame = [...searches]
+        .reverse()
+        .find(
+          (s) =>
+            s.normalized === searchEntry.normalized &&
+            s.source === searchEntry.source,
+        );
+      if (lastSame && searchEntry.timestamp - lastSame.timestamp < 15000)
+        return;
+      searches.push(searchEntry);
+      if (searches.length > 2000) searches.splice(0, searches.length - 2000);
+      await chrome.storage.local.set({ searches });
+    });
+  }
+
+  // --- INTERACCIONES (ME GUSTA Y SUSCRIPCIONES) ---
+  function isLikeActive(btn) {
+    if (!btn) return false;
+    if (btn.getAttribute("aria-pressed") === "true") return true;
+    const ytmRenderer = btn.closest("ytmusic-like-button-renderer");
+    return ytmRenderer?.getAttribute("like-status") === "LIKE";
+  }
+
+  function isSubscribeActive(btn) {
+    if (!btn) return false;
+    const container = btn.closest(
+      "ytd-subscribe-button-renderer, yt-subscribe-button-view-model, #subscribe-button",
+    );
+    if (container?.hasAttribute("subscribed")) return true;
+    const txt = (btn.textContent || "").trim().toLowerCase();
+    const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
+    return (
+      /^(suscrito|suscripto|subscribed)$/i.test(txt) ||
+      aria.includes("cancelar suscrip") ||
+      aria.includes("anular suscrip") ||
+      aria.includes("unsubscribe")
+    );
+  }
+
+  function saveInteraction(entry) {
+    if (stopIfInvalid() || !entry) return;
+    enqueueStorage(async () => {
+      if (stopIfInvalid()) return;
+      const data = await chrome.storage.local.get({ interactions: [] });
+      const interactions = Array.isArray(data.interactions)
+        ? data.interactions
+        : [];
+      // Evitar duplicados si tocó Like/Unlike/Like en menos de 2 minutos
+      const recentDup = interactions.find(
+        (it) =>
+          it.type === entry.type &&
+          it.targetKey === entry.targetKey &&
+          entry.timestamp - it.timestamp < 120000,
+      );
+      if (recentDup) return;
+      interactions.push(entry);
+      await chrome.storage.local.set({ interactions });
+    });
+  }
+
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (stopIfInvalid()) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+
+      // 1. Detectar Me gusta
+      const likeBtn = target.closest(
+        "like-button-view-model button, ytd-toggle-button-renderer#like-button button, #like-button button, ytmusic-like-button-renderer #button-shape-like button, ytmusic-like-button-renderer tp-yt-paper-icon-button.like",
+      );
+      if (likeBtn) {
+        const wasLiked = isLikeActive(likeBtn);
+        setTimeout(() => {
+          if (stopIfInvalid()) return;
+          if (!wasLiked && isLikeActive(likeBtn)) {
+            const info = getTrackInfo();
+            if (!info) return;
+            saveInteraction({
+              id: `lk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              type: "like",
+              targetKey: info.videoId || info.trackKey,
+              videoId: info.videoId || "",
+              videoUrl: info.videoUrl || location.href,
+              title: info.title,
+              artist: info.artist,
+              artwork: info.artwork,
+              category: info.category || "",
+              source,
+              timestamp: Date.now(),
+            });
+          }
+        }, 450);
+      }
+
+      // 2. Detectar Suscripción nueva
+      const subBtn = target.closest(
+        "ytd-subscribe-button-renderer button, yt-subscribe-button-view-model button, #subscribe-button button, ytmusic-subscribe-button-renderer button",
+      );
+      if (subBtn) {
+        const wasSub = isSubscribeActive(subBtn);
+        setTimeout(() => {
+          if (stopIfInvalid()) return;
+          if (!wasSub && isSubscribeActive(subBtn)) {
+            const basePath = getChannelBasePath();
+            let name = "";
+            let avatar = "";
+            let url = "";
+
+            if (basePath) {
+              const chInfo = getChannelPageInfo(basePath);
+              name = chInfo.name;
+              avatar = chInfo.avatar;
+              url = chInfo.url;
+            } else {
+              const info = getTrackInfo();
+              name = info?.artist || "Canal de YouTube";
+              avatar = info?.artwork || "";
+              url = info?.channelUrl || "";
+            }
+
+            saveInteraction({
+              id: `sb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              type: "subscribe",
+              targetKey: (url || name).toLowerCase(),
+              title: name,
+              artist: source === "yt_music" ? "YT Music" : "YouTube",
+              artwork: avatar,
+              channelUrl: url,
+              source,
+              timestamp: Date.now(),
+            });
+          }
+        }, 550);
+      }
+    },
+    true,
+  );
 
   // --- DETECCIÓN DE PÁGINAS DE CANAL ---
   function getChannelBasePath() {
@@ -427,6 +665,7 @@
       title: session.title,
       artist: session.artist,
       album: session.album || "",
+      category: session.category || "",
       artwork: session.artwork,
       channelUrl: session.channelUrl || "",
       source: session.source,
@@ -496,6 +735,7 @@
           title: info.title,
           artist: info.artist,
           album: info.album || "",
+          category: currentSession?.category || info.category || "",
           artwork: info.artwork,
           videoUrl: info.videoUrl,
           source: info.source,
@@ -530,6 +770,7 @@
     if (stopIfInvalid()) return;
 
     handleChannelTracking();
+    handleSearchTracking();
 
     const video = getActiveVideo();
     const info = getTrackInfo();
@@ -557,6 +798,8 @@
       }
       if (info.album && !currentSession.album)
         currentSession.album = info.album;
+      if (info.category && !currentSession.category)
+        currentSession.category = info.category;
       if (info.channelUrl && !currentSession.channelUrl)
         currentSession.channelUrl = info.channelUrl;
       if (info.artwork && !currentSession.artwork)
