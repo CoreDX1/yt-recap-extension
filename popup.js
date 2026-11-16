@@ -201,7 +201,22 @@ function renderHistory(history) {
     const hour = new Date(item.timestamp).getHours();
     hoursBuckets[hour] += item.seconds;
 
-    const current = tracksMap.get(item.trackKey) || {
+    // const current = tracksMap.get(item.trackKey) || {
+    //   title: item.title,
+    //   artist: item.artist,
+    //   artwork: item.artwork,
+    //   plays: 0,
+    //   loops: 0,
+    //   seconds: 0,
+    // };
+    // current.plays += 1;
+    // if (item.isLoop) current.loops += 1;
+    // current.seconds += item.seconds;
+    // if (!current.artwork && item.artwork) current.artwork = item.artwork;
+    // tracksMap.set(item.trackKey, current);
+
+    const groupKey = `${item.trackKey || item.source}::${(item.title || "").trim().toLowerCase()}`;
+    const current = tracksMap.get(groupKey) || {
       title: item.title,
       artist: item.artist,
       artwork: item.artwork,
@@ -213,7 +228,7 @@ function renderHistory(history) {
     if (item.isLoop) current.loops += 1;
     current.seconds += item.seconds;
     if (!current.artwork && item.artwork) current.artwork = item.artwork;
-    tracksMap.set(item.trackKey, current);
+    tracksMap.set(groupKey, current);
 
     const artistKey = item.artist || "Desconocido";
     const artistStats = artistsMap.get(artistKey) || {

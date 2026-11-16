@@ -123,7 +123,7 @@
 
     const trackKey = isMusic
       ? `ytm::${title.toLowerCase()}::${artist.toLowerCase()}`
-      : `yt::${videoId || title.toLowerCase()}`;
+      : `yt::${videoId}::${title.toLowerCase()}`;
 
     return { trackKey, title, artist, artwork, source };
   }
