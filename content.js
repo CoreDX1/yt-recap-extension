@@ -29,7 +29,11 @@
   function enqueueStorage(fn) {
     if (stopIfInvalid()) return saveQueue;
     saveQueue = saveQueue.then(fn).catch((err) => {
-      if (String(err?.message || err).includes("context invalidated")) {
+      if (
+        String(err?.message || err)
+          .toLowerCase()
+          .includes("context invalidated")
+      ) {
         if (timerId) clearInterval(timerId);
         return;
       }
@@ -38,49 +42,90 @@
     return saveQueue;
   }
 
-  function getTrackInfo() {
-    if (document.querySelector(".ad-showing")) return null;
+  function extractVideoId() {
+    const vParam = new URLSearchParams(location.search).get("v");
+    if (vParam) return vParam;
+    const match = location.pathname.match(
+      /^\/(?:shorts|live|embed)\/([^/?#]+)/,
+    );
+    return match ? match[1] : "";
+  }
 
+  function getActiveVideo() {
+    const all = [...document.querySelectorAll("video")];
+    const playing = all.find((v) => !v.paused && !v.ended && v.readyState >= 2);
+    if (playing) return playing;
+    return (
+      document.querySelector("#movie_player video.html5-main-video") ||
+      all[0] ||
+      null
+    );
+  }
+
+  function getTrackInfo() {
+    if (document.querySelector("#movie_player.ad-showing")) return null;
+
+    const videoId = extractVideoId();
     const meta = navigator.mediaSession?.metadata;
-    let title = meta?.title?.trim() || "";
-    let artist = meta?.artist?.trim() || "";
+    const metaTitle = meta?.title?.trim() || "";
+    const metaArtist = meta?.artist?.trim() || "";
     let artwork = meta?.artwork?.[meta.artwork.length - 1]?.src || "";
 
-    if (isMusic && !title) {
-      title =
+    let domTitle = "";
+    let domArtist = "";
+
+    if (isMusic) {
+      domTitle =
         document
           .querySelector("ytmusic-player-bar .title")
           ?.textContent?.trim() || "";
-      artist =
+      const byline =
         document
-          .querySelector("ytmusic-player-bar .byline a")
-          ?.textContent?.trim() || "Desconocido";
+          .querySelector("ytmusic-player-bar .byline")
+          ?.textContent?.trim() || "";
+      domArtist = byline.split("•")[0]?.trim() || "";
+    } else {
+      domTitle =
+        document
+          .querySelector(
+            "h1.ytd-watch-metadata, #title h1, ytd-reel-video-renderer[is-active] h2",
+          )
+          ?.textContent?.trim() || "";
+      domArtist =
+        document
+          .querySelector(
+            "ytd-watch-metadata #channel-name a, #upload-info #channel-name a, ytd-channel-name a, ytd-reel-video-renderer[is-active] #channel-name a",
+          )
+          ?.textContent?.trim() || "";
     }
 
-    if (!isMusic && !title) {
-      title =
-        document
-          .querySelector("h1.ytd-watch-metadata yt-formatted-string")
-          ?.textContent?.trim() || "";
-      artist =
-        document.querySelector("#owner #channel-name a")?.textContent?.trim() ||
-        "Canal";
-    }
+    const docTitle = document.title
+      .replace(/^\(\d+\)\s*/, "")
+      .replace(/\s*-\s*YouTube(\s+Music)?$/i, "")
+      .trim();
+
+    const title = isMusic
+      ? metaTitle || domTitle || docTitle
+      : domTitle ||
+        metaTitle ||
+        docTitle ||
+        (videoId ? `Video (${videoId})` : "");
 
     if (!title) return null;
 
-    const videoId = new URLSearchParams(location.search).get("v") || "";
+    const artist =
+      (isMusic ? metaArtist || domArtist : domArtist || metaArtist) ||
+      "YouTube";
+
+    if (!artwork && videoId) {
+      artwork = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    }
+
     const trackKey = isMusic
       ? `ytm::${title.toLowerCase()}::${artist.toLowerCase()}`
       : `yt::${videoId || title.toLowerCase()}`;
 
-    return {
-      trackKey,
-      title,
-      artist: artist || "Desconocido",
-      artwork,
-      source,
-    };
+    return { trackKey, title, artist, artwork, source };
   }
 
   function createSession(info, videoTime, duration, isLoop = false) {
@@ -183,7 +228,11 @@
         },
       });
     } catch (err) {
-      if (String(err?.message || err).includes("context invalidated")) {
+      if (
+        String(err?.message || err)
+          .toLowerCase()
+          .includes("context invalidated")
+      ) {
         if (timerId) clearInterval(timerId);
       }
     }
@@ -192,7 +241,7 @@
   timerId = setInterval(() => {
     if (stopIfInvalid()) return;
 
-    const video = document.querySelector("video");
+    const video = getActiveVideo();
     const info = getTrackInfo();
 
     if (!video || !info) return;
@@ -215,6 +264,19 @@
         false,
       );
     } else {
+      // Autocorregir título/artista/portada si YouTube tardó 1s en actualizar el DOM tras cambiar de video
+      if (info.title && currentSession.title !== info.title)
+        currentSession.title = info.title;
+      if (
+        info.artist &&
+        info.artist !== "YouTube" &&
+        currentSession.artist !== info.artist
+      ) {
+        currentSession.artist = info.artist;
+      }
+      if (info.artwork && !currentSession.artwork)
+        currentSession.artwork = info.artwork;
+
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
       const nearEnd =
         dur > 0 && currentSession.maxTimeReached >= Math.max(5, dur - 8);
@@ -239,9 +301,6 @@
         currentSession.seconds += 1;
         if (video.currentTime > currentSession.maxTimeReached) {
           currentSession.maxTimeReached = video.currentTime;
-        }
-        if (!currentSession.artwork && info.artwork) {
-          currentSession.artwork = info.artwork;
         }
 
         const justUnlocked =
