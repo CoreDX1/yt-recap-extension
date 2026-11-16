@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube & YT Music Recap",
+  "version": "1.0.0",
+  "description": "Genera tus propios Recaps con estadísticas reales de YouTube y YouTube Music.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://www.youtube.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*", "https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Ver mi Recap"
+  }
+}

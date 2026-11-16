@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Mi Recap</title>
+        <link rel="stylesheet" href="popup.css" />
+    </head>
+    <body>
+        <header>
+            <div class="title-row">
+                <h1>Tu Recap</h1>
+                <button id="exportBtn" title="Exportar JSON">Exportar</button>
+            </div>
+            <div class="filters">
+                <select id="periodSelect">
+                    <option value="7">Últimos 7 días</option>
+                    <option value="30" selected>Últimos 30 días</option>
+                    <option value="90">Últimos 3 meses</option>
+                    <option value="365">Este año</option>
+                    <option value="all">Todo</option>
+                </select>
+                <select id="sourceSelect">
+                    <option value="all">Todo (YT + Music)</option>
+                    <option value="yt_music">Solo YT Music</option>
+                    <option value="youtube">Solo YouTube</option>
+                </select>
+            </div>
+        </header>
+
+        <section class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-label">Tiempo total</span>
+                <strong id="totalTime">0 min</strong>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Reproducciones</span>
+                <strong id="totalPlays">0</strong>
+            </div>
+            <div class="stat-card wide">
+                <span class="stat-label">Top Artista / Canal</span>
+                <strong id="topArtist">—</strong>
+            </div>
+        </section>
+
+        <section class="top-section">
+            <h2>Top escuchado / visto</h2>
+            <ul id="topList" class="top-list"></ul>
+            <p id="emptyMsg" class="empty-msg" hidden>
+                Todavía no hay datos en este período. Reproducí al menos 20
+                segundos de un tema o video.
+            </p>
+        </section>
+
+        <footer>
+            <button id="clearBtn" class="danger-link">
+                Borrar historial local
+            </button>
+        </footer>
+
+        <script src="popup.js"></script>
+    </body>
+</html>
