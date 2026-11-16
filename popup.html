@@ -33,7 +33,7 @@
                     <button
                         id="exportBtn"
                         class="pill-btn"
-                        title="Exportar backup JSON"
+                        title="Exportar ZIP con JSON, tarjeta PNG e imágenes"
                     >
                         Exportar
                     </button>
@@ -143,14 +143,24 @@
             <section class="top-section">
                 <div class="section-header">
                     <h2>Top escuchado / visto</h2>
-                    <button
-                        id="makePlaylistBtn"
-                        class="mini-btn"
-                        hidden
-                        title="Abrir Top en una playlist instantánea"
-                    >
-                        ▶ Playlist
-                    </button>
+                    <div class="section-actions">
+                        <button
+                            id="exportImgBtn"
+                            class="mini-btn"
+                            hidden
+                            title="Descargar tarjeta PNG"
+                        >
+                            🖼️ PNG
+                        </button>
+                        <button
+                            id="makePlaylistBtn"
+                            class="mini-btn"
+                            hidden
+                            title="Abrir Top en una playlist instantánea"
+                        >
+                            ▶ Playlist
+                        </button>
+                    </div>
                 </div>
                 <ul id="topList" class="top-list"></ul>
                 <p id="emptyMsg" class="empty-msg" hidden>
@@ -203,7 +213,7 @@
             </section>
         </main>
 
-        <!-- TAB 4: CALENDARIO Y TOP SEMANAL -->
+        <!-- TAB 4: CALENDARIO, TOP DEL MES Y TOP SEMANAL -->
         <main id="tab-calendar" class="tab-panel" hidden>
             <section class="calendar-box">
                 <div class="cal-header">
@@ -246,6 +256,34 @@
                 <ul id="calDayList" class="top-list compact"></ul>
                 <p id="calDayEmpty" class="empty-msg small" hidden>
                     No se registró actividad en esta fecha.
+                </p>
+            </section>
+
+            <section class="cal-section">
+                <div class="section-header">
+                    <h2 id="calMonthTopTitle">Top del mes</h2>
+                    <div class="section-actions">
+                        <button
+                            id="calMonthImgBtn"
+                            class="mini-btn"
+                            hidden
+                            title="Descargar tarjeta PNG del mes"
+                        >
+                            🖼️ PNG
+                        </button>
+                        <button
+                            id="calMonthPlaylistBtn"
+                            class="mini-btn"
+                            hidden
+                            title="Crear playlist del mes"
+                        >
+                            ▶ Playlist
+                        </button>
+                    </div>
+                </div>
+                <ul id="calMonthTopList" class="top-list compact"></ul>
+                <p id="calMonthTopEmpty" class="empty-msg small" hidden>
+                    Sin actividad en este mes.
                 </p>
             </section>
 

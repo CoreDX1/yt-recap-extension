@@ -57,6 +57,11 @@ h1 {
     background: #383838;
 }
 
+.pill-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
 .import-status {
     background: rgba(74, 222, 128, 0.14);
     border: 1px solid rgba(74, 222, 128, 0.4);
@@ -292,6 +297,12 @@ select {
     margin-bottom: 0;
 }
 
+.section-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
 .mini-btn {
     background: #2a1d21;
     color: #ff99cc;
@@ -305,6 +316,11 @@ select {
 
 .mini-btn:hover {
     background: #3d262c;
+}
+
+.mini-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
 }
 
 h2 {

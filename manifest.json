@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
   "name": "YouTube & YT Music Recap",
-  "version": "1.0.0",
-  "description": "Genera tus propios Recaps con estadísticas reales de YouTube y YouTube Music.",
+  "version": "2.0.0",
+  "description": "Genera tus propios Recaps en tiempo real con calendario, bucles, canales, playlists y exportación ZIP/PNG.",
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
     "https://music.youtube.com/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "https://*.ytimg.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://yt3.ggpht.com/*"
   ],
   "content_scripts": [
     {

@@ -33,6 +33,7 @@ const totalLoopsEl = document.getElementById("totalLoops");
 const uniqueCountEl = document.getElementById("uniqueCount");
 const streakDaysEl = document.getElementById("streakDays");
 const peakHourEl = document.getElementById("peakHour");
+const exportImgBtn = document.getElementById("exportImgBtn");
 const makePlaylistBtn = document.getElementById("makePlaylistBtn");
 const topListEl = document.getElementById("topList");
 const emptyMsgEl = document.getElementById("emptyMsg");
@@ -57,6 +58,11 @@ const calGrid = document.getElementById("calGrid");
 const calDayTitle = document.getElementById("calDayTitle");
 const calDayList = document.getElementById("calDayList");
 const calDayEmpty = document.getElementById("calDayEmpty");
+const calMonthTopTitle = document.getElementById("calMonthTopTitle");
+const calMonthImgBtn = document.getElementById("calMonthImgBtn");
+const calMonthPlaylistBtn = document.getElementById("calMonthPlaylistBtn");
+const calMonthTopList = document.getElementById("calMonthTopList");
+const calMonthTopEmpty = document.getElementById("calMonthTopEmpty");
 const calWeeksTitle = document.getElementById("calWeeksTitle");
 const calWeeksList = document.getElementById("calWeeksList");
 
@@ -79,6 +85,9 @@ let cachedHistory = [];
 let cachedChannelVisits = [];
 let cachedSkips = [];
 let currentTopVideoIds = [];
+let currentMonthTopVideoIds = [];
+let summaryCardData = null;
+let monthCardData = null;
 
 if (isFullMode) expandBtn.hidden = true;
 
@@ -346,7 +355,9 @@ function renderHistory(history) {
     uniqueCountEl.textContent = "0";
     streakDaysEl.textContent = "0 días";
     peakHourEl.textContent = "—";
+    exportImgBtn.hidden = true;
     makePlaylistBtn.hidden = true;
+    summaryCardData = null;
     topListEl.replaceChildren();
     recentListEl.replaceChildren();
     topArtistsListEl.replaceChildren();
@@ -425,6 +436,21 @@ function renderHistory(history) {
       .filter(Boolean)
       .slice(0, 20);
     makePlaylistBtn.hidden = currentTopVideoIds.length === 0;
+
+    const topArtistEntry = [...artistsMap.entries()].sort(
+      (a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays,
+    )[0];
+    const periodLabel =
+      periodSelect.options[periodSelect.selectedIndex]?.text || "Mi Recap";
+    summaryCardData = {
+      subtitle: periodLabel.toUpperCase(),
+      topTracks: topTracksAll.slice(0, 5),
+      totalSeconds,
+      totalPlays: filtered.length,
+      totalLoops,
+      topArtist: topArtistEntry ? topArtistEntry[0] : "—",
+    };
+    exportImgBtn.hidden = topTracksAll.length === 0;
 
     const maxHourSec = Math.max(...hoursBuckets);
     const peakIdx = hoursBuckets.indexOf(maxHourSec);
@@ -506,7 +532,6 @@ function renderHistory(history) {
     });
     hoursChartEl.replaceChildren(...bars);
 
-    // Desglose formatos, origen y velocidad
     const avgRate =
       rateCount > 0
         ? `${(rateSum / rateCount).toFixed(2).replace(/\.00$/, "")}x`
@@ -535,7 +560,6 @@ function renderHistory(history) {
       }),
     );
 
-    // Top Álbumes
     const topAlbums = [...albumsMap.values()]
       .sort((a, b) => b.plays - a.plays || b.seconds - a.seconds)
       .slice(0, 5);
@@ -556,7 +580,6 @@ function renderHistory(history) {
       albumsBoxEl.hidden = true;
     }
 
-    // Top Artistas
     const topArtists = [...artistsMap.entries()]
       .sort((a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays)
       .slice(0, 5);
@@ -758,10 +781,13 @@ function renderCalendar() {
   }).format(monthDate);
   calMonthLabel.textContent = monthName;
 
+  const rawMonthWord = new Intl.DateTimeFormat("es-AR", {
+    month: "long",
+  }).format(monthDate);
   const shortMonth = new Intl.DateTimeFormat("es-AR", {
     month: "short",
   }).format(monthDate);
-  calWeeksTitle.textContent = `Top por semana de ${monthName.split(" ")[0]}`;
+  calWeeksTitle.textContent = `Top por semana de ${rawMonthWord}`;
 
   const firstWeekday = monthDate.getDay();
   const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
@@ -851,6 +877,81 @@ function renderCalendar() {
     );
   }
 
+  const monthItems = sourceItems.filter((item) => {
+    const d = new Date(item.timestamp);
+    return d.getFullYear() === calYear && d.getMonth() === calMonth;
+  });
+
+  // Top del mes
+  const monthTotalSec = monthItems.reduce(
+    (acc, it) => acc + (it.seconds || 0),
+    0,
+  );
+  const monthLoops = monthItems.filter((it) => it.isLoop).length;
+
+  calMonthTopTitle.textContent =
+    monthItems.length > 0
+      ? `Top de ${rawMonthWord} · ${formatDuration(monthTotalSec)} (${monthItems.length}x${monthLoops > 0 ? ` · 🔁${monthLoops}` : ""})`
+      : `Top de ${rawMonthWord}`;
+
+  if (monthItems.length === 0) {
+    currentMonthTopVideoIds = [];
+    monthCardData = null;
+    calMonthImgBtn.hidden = true;
+    calMonthPlaylistBtn.hidden = true;
+    calMonthTopList.replaceChildren();
+    calMonthTopEmpty.hidden = false;
+  } else {
+    calMonthTopEmpty.hidden = true;
+    const topMonth = aggregateTracks(monthItems);
+    currentMonthTopVideoIds = topMonth
+      .map((t) => t.videoId)
+      .filter(Boolean)
+      .slice(0, 20);
+    calMonthPlaylistBtn.hidden = currentMonthTopVideoIds.length === 0;
+
+    const monthArtists = new Map();
+    for (const it of monthItems) {
+      const k = it.artist || "YouTube";
+      monthArtists.set(k, (monthArtists.get(k) || 0) + (it.seconds || 1));
+    }
+    const topMonthArtist =
+      [...monthArtists.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "—";
+    monthCardData = {
+      subtitle: `${rawMonthWord.toUpperCase()} ${calYear}`,
+      topTracks: topMonth.slice(0, 5),
+      totalSeconds: monthTotalSec,
+      totalPlays: monthItems.length,
+      totalLoops: monthLoops,
+      topArtist: topMonthArtist,
+    };
+    calMonthImgBtn.hidden = topMonth.length === 0;
+
+    calMonthTopList.replaceChildren(
+      ...topMonth.slice(0, 10).map((track, idx) => {
+        const mins =
+          track.seconds > 0
+            ? `${Math.max(1, Math.round(track.seconds / 60))}m`
+            : "Imp.";
+        const right =
+          track.loops > 0
+            ? `${track.plays}x (🔁${track.loops}) · ${mins}`
+            : `${track.plays}x · ${mins}`;
+        return buildTrackRow(
+          String(idx + 1),
+          track.artwork,
+          track.title,
+          track.artist,
+          right,
+          {
+            href: track.videoUrl || undefined,
+          },
+        );
+      }),
+    );
+  }
+
+  // Top por semana
   const weekRanges = [
     { num: 1, start: 1, end: 7 },
     { num: 2, start: 8, end: 14 },
@@ -859,11 +960,6 @@ function renderCalendar() {
   ];
   if (daysInMonth > 28)
     weekRanges.push({ num: 5, start: 29, end: daysInMonth });
-
-  const monthItems = sourceItems.filter((item) => {
-    const d = new Date(item.timestamp);
-    return d.getFullYear() === calYear && d.getMonth() === calMonth;
-  });
 
   calWeeksList.replaceChildren(
     ...weekRanges.map((w) => {
@@ -948,6 +1044,475 @@ function renderCalendar() {
   );
 }
 
+// --- EXPORTAR TARJETA PNG (1080x1350) ---
+async function loadImageBitmapSafe(url) {
+  if (!url) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await createImageBitmap(blob);
+  } catch {
+    return null;
+  }
+}
+
+function drawCoverRounded(ctx, bitmap, x, y, w, h, radius) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, radius);
+  ctx.clip();
+
+  if (bitmap) {
+    const sw = bitmap.width;
+    const sh = bitmap.height;
+    const srcRatio = sw / sh;
+    const dstRatio = w / h;
+    let sx = 0,
+      sy = 0,
+      cw = sw,
+      ch = sh;
+    if (srcRatio > dstRatio) {
+      cw = sh * dstRatio;
+      sx = (sw - cw) / 2;
+    } else {
+      ch = sw / dstRatio;
+      sy = (sh - ch) / 2;
+    }
+    ctx.drawImage(bitmap, sx, sy, cw, ch, x, y, w, h);
+  } else {
+    const g = ctx.createLinearGradient(x, y, x + w, y + h);
+    g.addColorStop(0, "#3b1d2e");
+    g.addColorStop(1, "#1e2238");
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+  }
+  ctx.restore();
+}
+
+function fitCanvasText(ctx, text, maxWidth) {
+  const str = String(text || "");
+  if (ctx.measureText(str).width <= maxWidth) return str;
+  let out = str;
+  while (out.length > 1 && ctx.measureText(out + "…").width > maxWidth) {
+    out = out.slice(0, -1);
+  }
+  return out + "…";
+}
+
+async function renderRecapPngBlob(cardData) {
+  if (!cardData || cardData.topTracks.length === 0) return null;
+
+  const W = 1080;
+  const H = 1350;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, "#120c14");
+  bg.addColorStop(0.5, "#0d0d12");
+  bg.addColorStop(1, "#160e16");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const glow1 = ctx.createRadialGradient(180, 180, 20, 180, 180, 460);
+  glow1.addColorStop(0, "rgba(255, 78, 69, 0.28)");
+  glow1.addColorStop(1, "rgba(255, 78, 69, 0)");
+  ctx.fillStyle = glow1;
+  ctx.fillRect(0, 0, W, H);
+
+  const glow2 = ctx.createRadialGradient(920, 1100, 20, 920, 1100, 520);
+  glow2.addColorStop(0, "rgba(255, 153, 204, 0.22)");
+  glow2.addColorStop(1, "rgba(255, 153, 204, 0)");
+  ctx.fillStyle = glow2;
+  ctx.fillRect(0, 0, W, H);
+
+  const bitmaps = await Promise.all(
+    cardData.topTracks.map((t) => loadImageBitmapSafe(t.artwork)),
+  );
+
+  ctx.fillStyle = "#ff85b3";
+  ctx.font = "700 26px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("YOUTUBE & YT MUSIC RECAP", 72, 92);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "800 58px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(fitCanvasText(ctx, cardData.subtitle, W - 144), 72, 162);
+
+  const top1 = cardData.topTracks[0];
+  ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(72, 204, W - 144, 290, 28);
+  ctx.fill();
+  ctx.stroke();
+
+  drawCoverRounded(ctx, bitmaps[0], 102, 234, 230, 230, 20);
+
+  ctx.fillStyle = "#ff6b63";
+  ctx.font = "700 22px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("#1 MÁS REPRODUCIDO", 362, 276);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 38px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(fitCanvasText(ctx, top1.title, 610), 362, 334);
+
+  ctx.fillStyle = "#bbbbcc";
+  ctx.font = "500 28px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(fitCanvasText(ctx, top1.artist, 610), 362, 382);
+
+  const top1Mins =
+    top1.seconds > 0
+      ? `${Math.max(1, Math.round(top1.seconds / 60))} min`
+      : "Importado";
+  const top1Meta = `${top1.plays}x reproducciones${top1.loops > 0 ? ` · 🔁 ${top1.loops} bucles` : ""} · ${top1Mins}`;
+  ctx.fillStyle = "#86efac";
+  ctx.font = "600 24px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(top1Meta, 362, 438);
+
+  const kpis = [
+    ["TIEMPO TOTAL", formatDuration(cardData.totalSeconds)],
+    ["REPRODUCCIONES", String(cardData.totalPlays)],
+    ["BUCLES", `🔁 ${cardData.totalLoops}`],
+  ];
+  const kpiW = (W - 144 - 32) / 3;
+  kpis.forEach(([label, val], idx) => {
+    const kx = 72 + idx * (kpiW + 16);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.beginPath();
+    ctx.roundRect(kx, 524, kpiW, 118, 20);
+    ctx.fill();
+
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = "600 20px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(label, kx + 24, 566);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "800 38px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(val, kx + 24, 616);
+  });
+
+  ctx.fillStyle = "#d1d5db";
+  ctx.font = "700 26px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("TOP DEL PERÍODO", 72, 704);
+
+  const rest = cardData.topTracks.slice(1, 5);
+  rest.forEach((track, i) => {
+    const rowY = 730 + i * 112;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.045)";
+    ctx.beginPath();
+    ctx.roundRect(72, rowY, W - 144, 96, 18);
+    ctx.fill();
+
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = "800 28px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(String(i + 2), 98, rowY + 58);
+
+    drawCoverRounded(ctx, bitmaps[i + 1], 144, rowY + 14, 68, 68, 12);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 26px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(fitCanvasText(ctx, track.title, 580), 232, rowY + 44);
+
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = "500 22px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(fitCanvasText(ctx, track.artist, 580), 232, rowY + 76);
+
+    const mins =
+      track.seconds > 0
+        ? `${Math.max(1, Math.round(track.seconds / 60))}m`
+        : "Imp.";
+    const rightTxt = `${track.plays}x${track.loops > 0 ? ` (🔁${track.loops})` : ""} · ${mins}`;
+    ctx.fillStyle = "#e5e7eb";
+    ctx.font = "700 22px 'Segoe UI', system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(rightTxt, W - 98, rowY + 56);
+    ctx.textAlign = "left";
+  });
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+  ctx.beginPath();
+  ctx.roundRect(72, 1200, W - 144, 86, 20);
+  ctx.fill();
+
+  ctx.fillStyle = "#9ca3af";
+  ctx.font = "600 20px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("ARTISTA / CANAL TOP", 100, 1236);
+
+  ctx.fillStyle = "#ff99cc";
+  ctx.font = "700 28px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(fitCanvasText(ctx, cardData.topArtist, 580), 100, 1268);
+
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "600 20px 'Segoe UI', system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText("Tu Recap · Chrome", W - 100, 1252);
+  ctx.textAlign = "left";
+
+  bitmaps.forEach((b) => b?.close());
+
+  return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+async function exportRecapPng(cardData, btnEl) {
+  if (!cardData || cardData.topTracks.length === 0) return;
+  const origText = btnEl.textContent;
+  btnEl.disabled = true;
+  btnEl.textContent = "⏳...";
+  try {
+    const pngBlob = await renderRecapPngBlob(cardData);
+    if (!pngBlob) return;
+    const url = URL.createObjectURL(pngBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    const slug = cardData.subtitle.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    a.download = `recap-${slug}-${new Date().toISOString().slice(0, 10)}.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = origText;
+  }
+}
+
+exportImgBtn.addEventListener("click", () =>
+  exportRecapPng(summaryCardData, exportImgBtn),
+);
+calMonthImgBtn.addEventListener("click", () =>
+  exportRecapPng(monthCardData, calMonthImgBtn),
+);
+
+// --- GENERADOR DE ZIP NATIVO EN JS PURO (STORE) ---
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function computeCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function buildZipBlob(files) {
+  const encoder = new TextEncoder();
+  const now = new Date();
+  const dosTime =
+    ((now.getHours() & 0x1f) << 11) |
+    ((now.getMinutes() & 0x3f) << 5) |
+    ((now.getSeconds() >> 1) & 0x1f);
+  const dosDate =
+    (((Math.max(1980, now.getFullYear()) - 1980) & 0x7f) << 9) |
+    (((now.getMonth() + 1) & 0x0f) << 5) |
+    (now.getDate() & 0x1f);
+
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const data = file.data;
+    const crc = computeCrc32(data);
+    const size = data.length;
+
+    const lh = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true);
+    lv.setUint16(10, dosTime, true);
+    lv.setUint16(12, dosDate, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, size, true);
+    lv.setUint32(22, size, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+    lh.set(nameBytes, 30);
+
+    localParts.push(lh, data);
+
+    const ch = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, dosTime, true);
+    cv.setUint16(14, dosDate, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);
+    ch.set(nameBytes, 46);
+
+    centralParts.push(ch);
+    offset += lh.length + size;
+  }
+
+  let cdSize = 0;
+  for (const part of centralParts) cdSize += part.length;
+
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, offset, true);
+  ev.setUint16(20, 0, true);
+
+  return new Blob([...localParts, ...centralParts, eocd], {
+    type: "application/zip",
+  });
+}
+
+function sanitizeFileSlug(text) {
+  return (
+    String(text || "imagen")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "imagen"
+  );
+}
+
+function getExtFromMime(mime) {
+  if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
+  return "jpg";
+}
+
+exportBtn.addEventListener("click", async () => {
+  const origText = exportBtn.textContent;
+  exportBtn.disabled = true;
+  exportBtn.textContent = "⏳...";
+
+  try {
+    const {
+      history = [],
+      channelVisits = [],
+      skips = [],
+    } = await chrome.storage.local.get({
+      history: [],
+      channelVisits: [],
+      skips: [],
+    });
+
+    const imageTasks = [];
+    const seenUrls = new Set();
+    const usedNames = new Set();
+
+    function queueImage(url, folder, baseLabel) {
+      if (!url || !url.startsWith("http") || seenUrls.has(url)) return;
+      seenUrls.add(url);
+      const slug = sanitizeFileSlug(baseLabel);
+      let uniqueSlug = slug;
+      let n = 2;
+      while (usedNames.has(`${folder}/${uniqueSlug}`)) {
+        uniqueSlug = `${slug}-${n++}`;
+      }
+      usedNames.add(`${folder}/${uniqueSlug}`);
+      imageTasks.push({ url, folder, slug: uniqueSlug });
+    }
+
+    for (const item of history) {
+      queueImage(item.artwork, "imagenes/portadas", item.videoId || item.title);
+    }
+    for (const ch of channelVisits) {
+      queueImage(ch.avatar, "imagenes/canales", ch.name || ch.channelKey);
+    }
+    for (const sk of skips) {
+      queueImage(sk.artwork, "imagenes/portadas", sk.videoId || sk.title);
+    }
+
+    const zipFiles = [];
+    const imageMap = {};
+    let doneCount = 0;
+
+    const BATCH = 6;
+    for (let i = 0; i < imageTasks.length; i += BATCH) {
+      const slice = imageTasks.slice(i, i + BATCH);
+      await Promise.all(
+        slice.map(async (task) => {
+          try {
+            const res = await fetch(task.url);
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const buf = new Uint8Array(await blob.arrayBuffer());
+            const ext = getExtFromMime(blob.type || "");
+            const filePath = `${task.folder}/${task.slug}.${ext}`;
+            zipFiles.push({ name: filePath, data: buf });
+            imageMap[task.url] = filePath;
+          } catch {
+            // Ignorar si alguna imagen falló
+          } finally {
+            doneCount += 1;
+            exportBtn.textContent = `⏳ ${doneCount}/${imageTasks.length}`;
+          }
+        }),
+      );
+    }
+
+    if (summaryCardData) {
+      const cardBlob = await renderRecapPngBlob(summaryCardData);
+      if (cardBlob) {
+        zipFiles.push({
+          name: "recap-tarjeta.png",
+          data: new Uint8Array(await cardBlob.arrayBuffer()),
+        });
+      }
+    }
+
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      history,
+      channelVisits,
+      skips,
+      imageMap,
+    };
+    const jsonBytes = new TextEncoder().encode(
+      JSON.stringify(payload, null, 2),
+    );
+    zipFiles.unshift({ name: "recap-backup.json", data: jsonBytes });
+
+    const zipBlob = buildZipBlob(zipFiles);
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `youtube-recap-${new Date().toISOString().slice(0, 10)}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    exportBtn.disabled = false;
+    exportBtn.textContent = origText;
+  }
+});
+
 // --- IMPORTAR TAKEOUT / BACKUP ---
 function showImportMessage(msg) {
   importStatus.textContent = msg;
@@ -1024,8 +1589,6 @@ function parseTakeoutJson(entries) {
 }
 
 importBtn.addEventListener("click", () => {
-  // En Chrome, abrir un selector de archivos dentro de un popup lo cierra automáticamente.
-  // Si no estamos en pestaña completa, abrimos el modo completo primero.
   if (!isFullMode) {
     window.open(chrome.runtime.getURL("popup.html?full=1&import=1"), "_blank");
     return;
@@ -1049,7 +1612,6 @@ importInput.addEventListener("change", async (e) => {
     let addedCount = 0;
 
     if (Array.isArray(parsed)) {
-      // Formato Google Takeout (watch-history.json)
       const takeoutItems = parseTakeoutJson(parsed);
       const existingIds = new Set(data.history.map((h) => h.id));
       for (const it of takeoutItems) {
@@ -1064,7 +1626,6 @@ importInput.addEventListener("change", async (e) => {
         `✓ Importadas ${addedCount} reproducciones de Google Takeout.`,
       );
     } else if (parsed && Array.isArray(parsed.history)) {
-      // Backup propio de la extensión
       const existingIds = new Set(data.history.map((h) => h.id));
       for (const it of parsed.history) {
         if (it?.id && !existingIds.has(it.id)) {
@@ -1118,6 +1679,10 @@ expandBtn.addEventListener("click", () => {
 
 makePlaylistBtn.addEventListener("click", () => {
   openInstantPlaylist(currentTopVideoIds);
+});
+
+calMonthPlaylistBtn.addEventListener("click", () => {
+  openInstantPlaylist(currentMonthTopVideoIds);
 });
 
 // Navegación del calendario
@@ -1209,28 +1774,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 periodSelect.addEventListener("change", init);
 sourceSelect.addEventListener("change", init);
-
-exportBtn.addEventListener("click", async () => {
-  const {
-    history = [],
-    channelVisits = [],
-    skips = [],
-  } = await chrome.storage.local.get({
-    history: [],
-    channelVisits: [],
-    skips: [],
-  });
-  const payload = { history, channelVisits, skips };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `youtube-recap-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
 
 clearBtn.addEventListener("click", async () => {
   if (

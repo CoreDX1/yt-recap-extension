@@ -52,7 +52,6 @@
       /^\/(?:shorts|live|embed)\/([^/?#]+)/,
     );
     if (match) return match[1];
-    // Respaldo en YouTube Music cuando la URL no muestra ?v=
     const playerLink = document.querySelector(
       'a.ytp-title-link[href*="v="]',
     )?.href;
@@ -400,7 +399,6 @@
       const data = await chrome.storage.local.get({ skips: [] });
       const skips = Array.isArray(data.skips) ? data.skips : [];
       skips.push(skipEntry);
-      // Limitar a los últimos 1000 skips para mantener liviano el almacenamiento
       if (skips.length > 1000) skips.splice(0, skips.length - 1000);
       await chrome.storage.local.set({ skips });
     });
