@@ -1,429 +1,420 @@
 <!doctype html>
 <html lang="es">
-    <head>
-        <meta charset="UTF-8" />
-        <title>Mi Recap</title>
-        <link rel="stylesheet" href="popup.css" />
-    </head>
-    <body>
-        <header>
-            <div class="title-row">
-                <h1>Tu Recap</h1>
-                <div class="header-actions">
-                    <button
-                        id="expandBtn"
-                        class="pill-btn"
-                        title="Abrir en pestaña completa"
-                    >
-                        ⛶
-                    </button>
-                    <button
-                        id="importBtn"
-                        class="pill-btn"
-                        title="Importar backup .zip, .json o Google Takeout"
-                    >
-                        Importar
-                    </button>
-                    <input
-                        id="importInput"
-                        type="file"
-                        accept=".json,.zip,application/json,application/zip"
-                        hidden
-                    />
-                    <button
-                        id="exportBtn"
-                        class="pill-btn"
-                        title="Exportar ZIP con JSON, tarjeta PNG e imágenes"
-                    >
-                        Exportar
-                    </button>
-                </div>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Mi Recap</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="title-row">
+        <h1>Tu Recap</h1>
+        <div class="header-actions">
+          <button
+            id="expandBtn"
+            class="pill-btn"
+            title="Abrir en pestaña completa"
+          >
+            ⛶
+          </button>
+          <button
+            id="importBtn"
+            class="pill-btn"
+            title="Importar backup .zip, .json o Google Takeout"
+          >
+            Importar
+          </button>
+          <input
+            id="importInput"
+            type="file"
+            accept=".json,.zip,application/json,application/zip"
+            hidden
+          />
+          <button
+            id="exportBtn"
+            class="pill-btn"
+            title="Exportar ZIP con JSON, tarjeta PNG e imágenes"
+          >
+            Exportar
+          </button>
+        </div>
+      </div>
+
+      <div id="statusBanner" class="status-banner" hidden></div>
+
+      <!-- Tarjeta EN VIVO -->
+      <div id="nowPlayingCard" class="now-playing">
+        <div class="np-empty" id="npEmpty">
+          <span class="dot offline"></span> Nada reproduciéndose ahora
+        </div>
+        <div class="np-content" id="npContent" hidden>
+          <img id="npThumb" class="np-thumb" alt="" />
+          <div class="np-info">
+            <div class="np-top-line">
+              <span id="npStatusBadge" class="badge live">● En vivo</span>
+              <span id="npSourceBadge" class="badge source">YouTube</span>
+              <span id="npCategoryBadge" class="badge category" hidden
+                >Música</span
+              >
+              <span id="npFormatBadge" class="badge format" hidden>Short</span>
+              <span id="npLoopBadge" class="badge loop" hidden>🔁 Bucle</span>
             </div>
-
-            <div id="statusBanner" class="status-banner" hidden></div>
-
-            <!-- Tarjeta EN VIVO -->
-            <div id="nowPlayingCard" class="now-playing">
-                <div class="np-empty" id="npEmpty">
-                    <span class="dot offline"></span> Nada reproduciéndose ahora
-                </div>
-                <div class="np-content" id="npContent" hidden>
-                    <img id="npThumb" class="np-thumb" alt="" />
-                    <div class="np-info">
-                        <div class="np-top-line">
-                            <span id="npStatusBadge" class="badge live"
-                                >● En vivo</span
-                            >
-                            <span id="npSourceBadge" class="badge source"
-                                >YouTube</span
-                            >
-                            <span
-                                id="npCategoryBadge"
-                                class="badge category"
-                                hidden
-                                >Música</span
-                            >
-                            <span id="npFormatBadge" class="badge format" hidden
-                                >Short</span
-                            >
-                            <span id="npLoopBadge" class="badge loop" hidden
-                                >🔁 Bucle</span
-                            >
-                        </div>
-                        <div id="npTitle" class="np-title">—</div>
-                        <div id="npArtist" class="np-artist">—</div>
-                        <div class="np-progress-wrap">
-                            <div class="np-bar-bg">
-                                <div id="npBarFill" class="np-bar-fill"></div>
-                            </div>
-                            <div class="np-time-row">
-                                <span id="npTime">0:00 / 0:00</span>
-                                <span
-                                    id="npCountState"
-                                    class="np-count-state"
-                                ></span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <div id="npTitle" class="np-title">—</div>
+            <div id="npArtist" class="np-artist">—</div>
+            <div class="np-progress-wrap">
+              <div class="np-bar-bg">
+                <div id="npBarFill" class="np-bar-fill"></div>
+              </div>
+              <div class="np-time-row">
+                <span id="npTime">0:00 / 0:00</span>
+                <span id="npCountState" class="np-count-state"></span>
+              </div>
             </div>
+          </div>
+        </div>
+      </div>
 
-            <div class="filters">
-                <select id="periodSelect">
-                    <option value="7">Últimos 7 días</option>
-                    <option value="30" selected>Últimos 30 días</option>
-                    <option value="90">Últimos 3 meses</option>
-                    <option value="365">Este año</option>
-                    <option value="all">Todo</option>
-                </select>
-                <select id="sourceSelect">
-                    <option value="all">Todo (YT + Music)</option>
-                    <option value="yt_music">Solo YT Music</option>
-                    <option value="youtube">Solo YouTube</option>
-                    <option value="no_shorts">Excluir Shorts</option>
-                    <option value="short">Solo Shorts</option>
-                    <option value="live">Solo Directos</option>
-                </select>
-            </div>
+      <div class="filters">
+        <select id="periodSelect">
+          <option value="7">Últimos 7 días</option>
+          <option value="30" selected>Últimos 30 días</option>
+          <option value="90">Últimos 3 meses</option>
+          <option value="365">Este año</option>
+          <option value="all">Todo</option>
+        </select>
+        <select id="sourceSelect">
+          <option value="all">Todo (YT + Music)</option>
+          <option value="yt_music">Solo YT Music</option>
+          <option value="youtube">Solo YouTube</option>
+          <option value="no_shorts">Excluir Shorts</option>
+          <option value="short">Solo Shorts</option>
+          <option value="live">Solo Directos</option>
+        </select>
+      </div>
 
-            <nav class="tabs">
-                <button class="tab-btn active" data-tab="summary">
-                    Resumen
-                </button>
-                <button class="tab-btn" data-tab="recent">Reciente</button>
-                <button class="tab-btn" data-tab="activity">Stats</button>
-                <button class="tab-btn" data-tab="calendar">Calendario</button>
-                <button class="tab-btn" data-tab="channels">Canales</button>
-                <button class="tab-btn" data-tab="likes">Likes</button>
-            </nav>
-        </header>
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="summary">Resumen</button>
+        <button class="tab-btn" data-tab="recent">Reciente</button>
+        <button class="tab-btn" data-tab="activity">Stats</button>
+        <button class="tab-btn" data-tab="calendar">Calendario</button>
+        <button class="tab-btn" data-tab="channels">Canales</button>
+        <button class="tab-btn" data-tab="likes">Likes</button>
+      </nav>
+    </header>
 
-        <!-- TAB 1: RESUMEN -->
-        <main id="tab-summary" class="tab-panel active">
-            <section class="stats-grid">
-                <div class="stat-card">
-                    <span class="stat-label">Tiempo total</span
-                    ><strong id="totalTime">0 min</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Reproducciones</span
-                    ><strong id="totalPlays">0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Bucles detectados</span
-                    ><strong id="totalLoops">🔁 0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Títulos únicos</span
-                    ><strong id="uniqueCount">0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Racha actual</span
-                    ><strong id="streakDays">0 días</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Hora pico</span
-                    ><strong id="peakHour">—</strong>
-                </div>
-            </section>
+    <!-- TAB 1: RESUMEN -->
+    <main id="tab-summary" class="tab-panel active">
+      <section class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">Tiempo total</span
+          ><strong id="totalTime">0 min</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Reproducciones</span
+          ><strong id="totalPlays">0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Bucles detectados</span
+          ><strong id="totalLoops">🔁 0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Títulos únicos</span
+          ><strong id="uniqueCount">0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Racha actual</span
+          ><strong id="streakDays">0 días</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Hora pico</span
+          ><strong id="peakHour">—</strong>
+        </div>
+      </section>
 
-            <section class="top-section">
-                <div class="section-header">
-                    <h2>Top escuchado / visto</h2>
-                    <div class="section-actions">
-                        <button
-                            id="exportImgBtn"
-                            class="mini-btn"
-                            hidden
-                            title="Descargar tarjeta PNG"
-                        >
-                            🖼️ PNG
-                        </button>
-                        <button
-                            id="makePlaylistBtn"
-                            class="mini-btn"
-                            hidden
-                            title="Abrir Top en una playlist instantánea"
-                        >
-                            ▶ Playlist
-                        </button>
-                    </div>
-                </div>
-                <ul id="topList" class="top-list"></ul>
-                <p id="emptyMsg" class="empty-msg" hidden>
-                    Todavía no hay datos en este período. Reproducí al menos 20
-                    segundos de un tema o video.
-                </p>
-            </section>
-        </main>
+      <section class="top-section">
+        <div class="section-header">
+          <h2>Top escuchado / visto</h2>
+          <div class="section-actions">
+            <button
+              id="exportImgBtn"
+              class="mini-btn"
+              hidden
+              title="Descargar tarjeta PNG"
+            >
+              🖼️ PNG
+            </button>
+            <button
+              id="makePlaylistBtn"
+              class="mini-btn"
+              hidden
+              title="Abrir Top en una playlist instantánea"
+            >
+              ▶ Playlist
+            </button>
+          </div>
+        </div>
+        <ul id="topList" class="top-list"></ul>
+        <p id="emptyMsg" class="empty-msg" hidden>
+          Todavía no hay datos en este período. Reproducí al menos 20 segundos
+          de un tema o video.
+        </p>
+      </section>
+    </main>
 
-        <!-- TAB 2: RECIENTE -->
-        <main id="tab-recent" class="tab-panel" hidden>
-            <div class="sub-pills">
-                <button class="sub-pill active" data-recent="plays">
-                    ▶ Reproducciones
-                </button>
-                <button class="sub-pill" data-recent="likes">
-                    ❤️ Me gusta
-                </button>
-                <button class="sub-pill" data-recent="searches">
-                    🔍 Búsquedas
-                </button>
-                <button class="sub-pill" data-recent="subs">🔔 Suscrip.</button>
-            </div>
-            <ul id="recentList" class="top-list tall"></ul>
-            <p id="recentEmpty" class="empty-msg" hidden>
-                Sin actividad reciente en esta categoría.
-            </p>
-        </main>
+    <!-- TAB 2: RECIENTE -->
+    <main id="tab-recent" class="tab-panel" hidden>
+      <div class="sub-pills">
+        <button class="sub-pill active" data-recent="plays">
+          ▶ Reproducciones
+        </button>
+        <button class="sub-pill" data-recent="likes">❤️ Me gusta</button>
+        <button class="sub-pill" data-recent="searches">🔍 Búsquedas</button>
+        <button class="sub-pill" data-recent="subs">🔔 Suscrip.</button>
+      </div>
+      <ul id="recentList" class="top-list tall"></ul>
+      <p id="recentEmpty" class="empty-msg" hidden>
+        Sin actividad reciente en esta categoría.
+      </p>
+    </main>
 
-        <!-- TAB 3: STATS -->
-        <main id="tab-activity" class="tab-panel" hidden>
-            <section id="categoriesBox" class="activity-box" hidden>
-                <h2>Categorías / Géneros</h2>
-                <div id="categoriesList" class="cat-bars"></div>
-            </section>
+    <!-- TAB 3: STATS -->
+    <main id="tab-activity" class="tab-panel" hidden>
+      <section id="categoriesBox" class="activity-box" hidden>
+        <h2>Categorías / Géneros</h2>
+        <div id="categoriesList" class="cat-bars"></div>
+      </section>
 
-            <section class="activity-box">
-                <h2>Actividad por hora del día (00h – 23h)</h2>
-                <div id="hoursChart" class="hours-chart"></div>
-                <div class="hours-labels">
-                    <span>00h</span><span>06h</span><span>12h</span
-                    ><span>18h</span><span>23h</span>
-                </div>
-            </section>
+      <section class="activity-box">
+        <h2>Actividad por hora del día (00h – 23h)</h2>
+        <div id="hoursChart" class="hours-chart"></div>
+        <div class="hours-labels">
+          <span>00h</span><span>06h</span><span>12h</span><span>18h</span
+          ><span>23h</span>
+        </div>
+      </section>
 
-            <section class="activity-box">
-                <h2>Formatos, origen e interacciones</h2>
-                <div id="breakdownStats" class="breakdown-grid"></div>
-            </section>
+      <section class="activity-box">
+        <h2>Formatos, origen e interacciones</h2>
+        <div id="breakdownStats" class="breakdown-grid"></div>
+      </section>
 
-            <section id="searchesBox" class="activity-box" hidden>
-                <h2>Top Búsquedas</h2>
-                <ul id="topSearchesList" class="top-list compact"></ul>
-            </section>
+      <section id="searchesBox" class="activity-box" hidden>
+        <h2>Top Búsquedas</h2>
+        <ul id="topSearchesList" class="top-list compact"></ul>
+      </section>
 
-            <section id="albumsBox" class="activity-box" hidden>
-                <h2>Top Álbumes (YT Music)</h2>
-                <ul id="topAlbumsList" class="top-list compact"></ul>
-            </section>
+      <section id="albumsBox" class="activity-box" hidden>
+        <h2>Top Álbumes (YT Music)</h2>
+        <ul id="topAlbumsList" class="top-list compact"></ul>
+      </section>
 
-            <section class="activity-box">
-                <h2>Top 5 Artistas / Canales</h2>
-                <ul id="topArtistsList" class="top-list compact"></ul>
-            </section>
+      <section class="activity-box">
+        <h2>Top 5 Artistas / Canales</h2>
+        <ul id="topArtistsList" class="top-list compact"></ul>
+      </section>
 
-            <section id="skipsBox" class="activity-box" hidden>
-                <h2>Más salteadas (&lt; 20s)</h2>
-                <ul id="topSkipsList" class="top-list compact"></ul>
-            </section>
-        </main>
+      <section id="skipsBox" class="activity-box" hidden>
+        <h2>Más salteadas (&lt; 20s)</h2>
+        <ul id="topSkipsList" class="top-list compact"></ul>
+      </section>
+    </main>
 
-        <!-- TAB 4: CALENDARIO -->
-        <main id="tab-calendar" class="tab-panel" hidden>
-            <section class="calendar-box">
-                <div class="cal-header">
-                    <span id="calMonthLabel" class="cal-month-label">—</span>
-                    <div class="cal-nav">
-                        <button
-                            id="calTodayBtn"
-                            class="cal-today-btn"
-                            title="Ir a hoy"
-                        >
-                            Hoy
-                        </button>
-                        <button
-                            id="calPrevBtn"
-                            class="cal-arrow-btn"
-                            title="Mes anterior"
-                        >
-                            ‹
-                        </button>
-                        <button
-                            id="calNextBtn"
-                            class="cal-arrow-btn"
-                            title="Mes siguiente"
-                        >
-                            ›
-                        </button>
-                    </div>
-                </div>
+    <!-- TAB 4: CALENDARIO -->
+    <main id="tab-calendar" class="tab-panel" hidden>
+      <section class="calendar-box">
+        <div class="cal-header">
+          <span id="calMonthLabel" class="cal-month-label">—</span>
+          <div class="cal-nav">
+            <button id="calTodayBtn" class="cal-today-btn" title="Ir a hoy">
+              Hoy
+            </button>
+            <button id="calPrevBtn" class="cal-arrow-btn" title="Mes anterior">
+              ‹
+            </button>
+            <button id="calNextBtn" class="cal-arrow-btn" title="Mes siguiente">
+              ›
+            </button>
+          </div>
+        </div>
 
-                <div class="cal-weekdays">
-                    <span>D</span><span>L</span><span>M</span><span>X</span
-                    ><span>J</span><span>V</span><span>S</span>
-                </div>
-                <div id="calGrid" class="cal-grid"></div>
-            </section>
+        <div class="cal-weekdays">
+          <span>D</span><span>L</span><span>M</span><span>X</span><span>J</span
+          ><span>V</span><span>S</span>
+        </div>
+        <div id="calGrid" class="cal-grid"></div>
+      </section>
 
-            <section class="cal-section">
-                <h2 id="calDayTitle">Actividad del día</h2>
-                <div id="calDayFilters" class="sub-pills">
-                    <button class="cal-pill sub-pill active" data-calday="all">
-                        Todo
-                    </button>
-                    <button class="cal-pill sub-pill" data-calday="plays">
-                        ▶ Reprod.
-                    </button>
-                    <button class="cal-pill sub-pill" data-calday="likes">
-                        ❤️ Likes
-                    </button>
-                    <button class="cal-pill sub-pill" data-calday="subs">
-                        🔔 Suscrip.
-                    </button>
-                    <button class="cal-pill sub-pill" data-calday="searches">
-                        🔍 Búsquedas
-                    </button>
-                </div>
-                <ul id="calDayList" class="top-list compact"></ul>
-                <p id="calDayEmpty" class="empty-msg small" hidden>
-                    No se registró actividad en esta fecha.
-                </p>
-            </section>
+      <section class="cal-section">
+        <h2 id="calDayTitle">Actividad del día</h2>
+        <div id="calDayFilters" class="sub-pills">
+          <button class="cal-pill sub-pill active" data-calday="all">
+            Todo
+          </button>
+          <button class="cal-pill sub-pill" data-calday="plays">
+            ▶ Reprod.
+          </button>
+          <button class="cal-pill sub-pill" data-calday="likes">
+            ❤️ Likes
+          </button>
+          <button class="cal-pill sub-pill" data-calday="subs">
+            🔔 Suscrip.
+          </button>
+          <button class="cal-pill sub-pill" data-calday="searches">
+            🔍 Búsquedas
+          </button>
+        </div>
+        <ul id="calDayList" class="top-list compact"></ul>
+        <p id="calDayEmpty" class="empty-msg small" hidden>
+          No se registró actividad en esta fecha.
+        </p>
+      </section>
 
-            <section class="cal-section">
-                <div class="section-header">
-                    <h2 id="calMonthTopTitle">Top del mes</h2>
-                    <div class="section-actions">
-                        <button
-                            id="calMonthImgBtn"
-                            class="mini-btn"
-                            hidden
-                            title="Descargar tarjeta PNG del mes"
-                        >
-                            🖼️ PNG
-                        </button>
-                        <button
-                            id="calMonthPlaylistBtn"
-                            class="mini-btn"
-                            hidden
-                            title="Crear playlist del mes"
-                        >
-                            ▶ Playlist
-                        </button>
-                    </div>
-                </div>
-                <ul id="calMonthTopList" class="top-list compact"></ul>
-                <p id="calMonthTopEmpty" class="empty-msg small" hidden>
-                    Sin reproducciones en este mes.
-                </p>
-            </section>
+      <section class="cal-section">
+        <div class="section-header">
+          <h2 id="calMonthTopTitle">Top del mes</h2>
+          <div class="section-actions">
+            <button
+              id="calMonthImgBtn"
+              class="mini-btn"
+              hidden
+              title="Descargar tarjeta PNG del mes"
+            >
+              🖼️ PNG
+            </button>
+            <button
+              id="calMonthPlaylistBtn"
+              class="mini-btn"
+              hidden
+              title="Crear playlist del mes"
+            >
+              ▶ Playlist
+            </button>
+          </div>
+        </div>
+        <ul id="calMonthTopList" class="top-list compact"></ul>
+        <p id="calMonthTopEmpty" class="empty-msg small" hidden>
+          Sin reproducciones en este mes.
+        </p>
+      </section>
 
-            <section id="calMonthSocialBox" class="cal-section" hidden>
-                <h2 id="calMonthSocialTitle">
-                    Me gusta y suscripciones del mes
-                </h2>
-                <ul id="calMonthSocialList" class="top-list compact"></ul>
-            </section>
+      <section id="calMonthSocialBox" class="cal-section" hidden>
+        <h2 id="calMonthSocialTitle">Me gusta y suscripciones del mes</h2>
+        <ul id="calMonthSocialList" class="top-list compact"></ul>
+      </section>
 
-            <section class="cal-section">
-                <h2 id="calWeeksTitle">Top por semana</h2>
-                <div id="calWeeksList" class="weeks-list"></div>
-            </section>
-        </main>
+      <section class="cal-section">
+        <h2 id="calWeeksTitle">Top por semana</h2>
+        <div id="calWeeksList" class="weeks-list"></div>
+      </section>
+    </main>
 
-        <!-- TAB 5: CANALES -->
-        <main id="tab-channels" class="tab-panel" hidden>
-            <section class="stats-grid">
-                <div class="stat-card">
-                    <span class="stat-label">Canales únicos</span
-                    ><strong id="chUniqueCount">0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Visitas a canales</span
-                    ><strong id="chTotalVisits">0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Suscrip. nuevas</span
-                    ><strong id="chNewSubs">🔔 0</strong>
-                </div>
-            </section>
+    <!-- TAB 5: CANALES -->
+    <main id="tab-channels" class="tab-panel" hidden>
+      <section class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">Canales únicos</span
+          ><strong id="chUniqueCount">0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Visitas a canales</span
+          ><strong id="chTotalVisits">0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Suscrip. nuevas</span
+          ><strong id="chNewSubs">🔔 0</strong>
+        </div>
+      </section>
 
-            <section class="cal-section">
+      <!-- <section class="cal-section">
                 <h2>Ranking de canales</h2>
                 <ul id="channelsTopList" class="top-list compact"></ul>
                 <p id="channelsEmpty" class="empty-msg small" hidden>
                     Todavía no registraste canales en este período.
                 </p>
-            </section>
+            </section> -->
 
-            <section class="cal-section">
-                <h2>Últimas visitas directas a canales</h2>
-                <ul id="channelsRecentList" class="top-list compact"></ul>
-                <p id="channelsRecentEmpty" class="empty-msg small" hidden>
-                    Entrá a cualquier canal en YouTube para registrarlo aquí.
-                </p>
-            </section>
-        </main>
+      <section class="cal-section">
+        <h2>Ranking de canales</h2>
+        <div class="sub-pills compact-pills">
+          <button class="ch-sort-pill sub-pill active" data-chsort="time">
+            ⏱️ Duración
+          </button>
+          <button class="ch-sort-pill sub-pill" data-chsort="visits">
+            👁️ Visitas
+          </button>
+          <button class="ch-sort-pill sub-pill" data-chsort="plays">
+            ▶ Reprod.
+          </button>
+        </div>
+        <div class="sub-pills compact-pills">
+          <button class="ch-dur-pill sub-pill active" data-chmin="0">
+            Todos
+          </button>
+          <button class="ch-dur-pill sub-pill" data-chmin="1">&gt; 0m</button>
+          <button class="ch-dur-pill sub-pill" data-chmin="900">+15m</button>
+          <button class="ch-dur-pill sub-pill" data-chmin="3600">+1h</button>
+        </div>
+        <ul id="channelsTopList" class="top-list compact"></ul>
+        <p id="channelsEmpty" class="empty-msg small" hidden>
+          No hay canales que coincidan con este filtro.
+        </p>
+      </section>
 
-        <!-- TAB 6: LIKES, SUSCRIPCIONES Y BÚSQUEDAS -->
-        <main id="tab-likes" class="tab-panel" hidden>
-            <section class="stats-grid">
-                <div class="stat-card">
-                    <span class="stat-label">Me gusta</span
-                    ><strong id="lkTotalLikes">❤️ 0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Suscrip. nuevas</span
-                    ><strong id="lkTotalSubs">🔔 0</strong>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Búsquedas</span
-                    ><strong id="lkTotalSearches">🔍 0</strong>
-                </div>
-            </section>
+      <section class="cal-section">
+        <h2>Últimas visitas directas a canales</h2>
+        <ul id="channelsRecentList" class="top-list compact"></ul>
+        <p id="channelsRecentEmpty" class="empty-msg small" hidden>
+          Entrá a cualquier canal en YouTube para registrarlo aquí.
+        </p>
+      </section>
+    </main>
 
-            <section class="cal-section">
-                <h2>❤️ Videos y canciones con Me gusta</h2>
-                <ul id="likesList" class="top-list compact"></ul>
-                <p id="likesEmpty" class="empty-msg small" hidden>
-                    Todavía no diste Me gusta en este período.
-                </p>
-            </section>
+    <!-- TAB 6: LIKES, SUSCRIPCIONES Y BÚSQUEDAS -->
+    <main id="tab-likes" class="tab-panel" hidden>
+      <section class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">Me gusta</span
+          ><strong id="lkTotalLikes">❤️ 0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Suscrip. nuevas</span
+          ><strong id="lkTotalSubs">🔔 0</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Búsquedas</span
+          ><strong id="lkTotalSearches">🔍 0</strong>
+        </div>
+      </section>
 
-            <section class="cal-section">
-                <h2>🔔 Nuevas suscripciones</h2>
-                <ul id="subsList" class="top-list compact"></ul>
-                <p id="subsEmpty" class="empty-msg small" hidden>
-                    Todavía no registraste nuevas suscripciones en este período.
-                </p>
-            </section>
+      <section class="cal-section">
+        <h2>❤️ Videos y canciones con Me gusta</h2>
+        <ul id="likesList" class="top-list compact"></ul>
+        <p id="likesEmpty" class="empty-msg small" hidden>
+          Todavía no diste Me gusta en este período.
+        </p>
+      </section>
 
-            <section class="cal-section">
-                <h2>🔍 Últimas búsquedas</h2>
-                <ul id="socialSearchesList" class="top-list compact"></ul>
-                <p id="socialSearchesEmpty" class="empty-msg small" hidden>
-                    Sin búsquedas registradas en este período.
-                </p>
-            </section>
-        </main>
+      <section class="cal-section">
+        <h2>🔔 Nuevas suscripciones</h2>
+        <ul id="subsList" class="top-list compact"></ul>
+        <p id="subsEmpty" class="empty-msg small" hidden>
+          Todavía no registraste nuevas suscripciones en este período.
+        </p>
+      </section>
 
-        <footer>
-            <button id="clearBtn" class="danger-link">
-                Borrar historial local
-            </button>
-        </footer>
+      <section class="cal-section">
+        <h2>🔍 Últimas búsquedas</h2>
+        <ul id="socialSearchesList" class="top-list compact"></ul>
+        <p id="socialSearchesEmpty" class="empty-msg small" hidden>
+          Sin búsquedas registradas en este período.
+        </p>
+      </section>
+    </main>
 
-        <script type="module" src="src/popup.js"></script>
-    </body>
+    <footer>
+      <button id="clearBtn" class="danger-link">Borrar historial local</button>
+    </footer>
+
+    <script type="module" src="src/popup.js"></script>
+  </body>
 </html>

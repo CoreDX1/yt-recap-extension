@@ -117,6 +117,8 @@ if (isFullMode) dom.expandBtn.hidden = true;
 const nowInit = new Date();
 const uiState = {
   activeTab: "summary",
+  channelSort: "time",
+  channelMinSec: 0,
   dirtyTabs: new Set([
     "summary",
     "recent",
@@ -173,10 +175,13 @@ function buildTrackRow(
   rank.className = "rank";
   rank.textContent = rankText;
 
-  const img = document.createElement("img");
-  img.className = opts.avatar ? "thumb avatar" : "thumb";
-  if (artwork) img.src = artwork;
-  img.alt = "";
+  let img = null;
+  if (!opts.noThumb) {
+    img = document.createElement("img");
+    img.className = opts.avatar ? "thumb avatar" : "thumb";
+    if (artwork) img.src = artwork;
+    img.alt = "";
+  }
 
   const meta = document.createElement("div");
   meta.className = "meta";
@@ -191,9 +196,21 @@ function buildTrackRow(
 
   meta.append(title, sub);
 
+  if (opts.barPct > 0) {
+    const track = document.createElement("div");
+    track.className = "ch-bar-track";
+    const fill = document.createElement("div");
+    fill.className = "ch-bar-fill";
+    fill.style.width = `${Math.min(100, Math.max(3, opts.barPct))}%`;
+    track.append(fill);
+    meta.append(track);
+  }
+
   const stats = document.createElement("div");
   stats.className = "track-stats";
   stats.textContent = rightText;
+
+  const children = img ? [rank, img, meta, stats] : [rank, meta, stats];
 
   if (opts.href) {
     const a = document.createElement("a");
@@ -201,10 +218,10 @@ function buildTrackRow(
     a.href = opts.href;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.append(rank, img, meta, stats);
+    a.append(...children);
     li.append(a);
   } else {
-    li.append(rank, img, meta, stats);
+    li.append(...children);
   }
 
   return li;
@@ -237,6 +254,7 @@ function renderSearchRow(s) {
     "Buscar ↗",
     {
       href: s.url || undefined,
+      noThumb: true,
     },
   );
 }
@@ -692,6 +710,7 @@ function renderActivityTab() {
           `${s.count}x`,
           {
             href: s.url || undefined,
+            noThumb: true,
           },
         ),
       ),
@@ -1128,7 +1147,6 @@ function renderCalendarTab() {
     }),
   );
 }
-
 function renderChannelsTab() {
   const filteredVisits = getFilteredMeta(store.channelVisits, true);
   const filteredPlays = getFilteredPlays(true);
@@ -1168,30 +1186,50 @@ function renderChannelsTab() {
     if (!ch.avatar && p.artwork) ch.avatar = p.artwork;
   }
 
-  const ranked = [...channelsMap.values()].sort(
-    (a, b) => b.visits - a.visits || b.plays - a.plays || b.seconds - a.seconds,
+  const allChannels = [...channelsMap.values()];
+  const filtered = allChannels.filter(
+    (ch) => ch.seconds >= uiState.channelMinSec,
   );
 
-  dom.chUniqueCount.textContent = String(ranked.length);
+  filtered.sort((a, b) => {
+    if (uiState.channelSort === "time") {
+      return b.seconds - a.seconds || b.plays - a.plays || b.visits - a.visits;
+    }
+    if (uiState.channelSort === "plays") {
+      return b.plays - a.plays || b.seconds - a.seconds || b.visits - a.visits;
+    }
+    return b.visits - a.visits || b.seconds - a.seconds || b.plays - a.plays;
+  });
+
+  const maxSec = Math.max(0, ...filtered.map((c) => c.seconds));
+
+  dom.chUniqueCount.textContent = String(allChannels.length);
   dom.chTotalVisits.textContent = String(filteredVisits.length);
   dom.chNewSubs.textContent = `🔔 ${newSubsCount}`;
 
-  dom.channelsEmpty.hidden = ranked.length > 0;
+  dom.channelsEmpty.hidden = filtered.length > 0;
   dom.channelsTopList.replaceChildren(
-    ...ranked.slice(0, 20).map((ch, idx) => {
+    ...filtered.slice(0, 25).map((ch, idx) => {
       const subParts = [];
       if (ch.visits > 0)
         subParts.push(
           `👁️ ${ch.visits} ${ch.visits === 1 ? "visita" : "visitas"}`,
         );
       if (ch.plays > 0) subParts.push(`▶ ${ch.plays} rep.`);
+      if (subParts.length === 0) subParts.push("Sin datos");
+
+      const barPct =
+        maxSec > 0 && ch.seconds > 0
+          ? Math.round((ch.seconds / maxSec) * 100)
+          : 0;
+
       return buildTrackRow(
         String(idx + 1),
         ch.avatar,
         ch.name,
         subParts.join(" · "),
         ch.seconds > 0 ? formatDuration(ch.seconds) : `${ch.visits}x`,
-        { href: ch.url || undefined, avatar: true },
+        { href: ch.url || undefined, avatar: true, barPct },
       );
     }),
   );
@@ -1467,6 +1505,28 @@ document.querySelectorAll(".cal-pill[data-calday]").forEach((btn) => {
     btn.classList.add("active");
     uiState.calDayMode = btn.dataset.calday;
     renderCalendarTab();
+  });
+});
+
+document.querySelectorAll(".ch-sort-pill[data-chsort]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document
+      .querySelectorAll(".ch-sort-pill[data-chsort]")
+      .forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    uiState.channelSort = btn.dataset.chsort;
+    renderChannelsTab();
+  });
+});
+
+document.querySelectorAll(".ch-dur-pill[data-chmin]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document
+      .querySelectorAll(".ch-dur-pill[data-chmin]")
+      .forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    uiState.channelMinSec = Number(btn.dataset.chmin || 0);
+    renderChannelsTab();
   });
 });
 

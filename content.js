@@ -306,7 +306,7 @@
         .find(
           (s) => s.normalized === entry.normalized && s.source === entry.source,
         );
-      if (lastSame && entry.timestamp - lastSame.timestamp < 15000) return;
+      if (lastSame && entry.timestamp - lastSame.timestamp < 30000) return;
       searches.push(entry);
       if (searches.length > CONFIG.MAX_SEARCHES) {
         searches.splice(0, searches.length - CONFIG.MAX_SEARCHES);
