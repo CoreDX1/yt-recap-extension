@@ -21,18 +21,24 @@
   width: 6px;
   height: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
   background: #333;
   border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
   background: #4a4a4a;
+}
+
+button:focus {
+  outline: none;
+}
+button:focus-visible,
+input:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255, 107, 99, 0.55);
+  outline: none;
 }
 
 body {
@@ -77,6 +83,7 @@ h1 {
   font-size: 19px;
   font-weight: 700;
   background: linear-gradient(90deg, var(--accent-red), var(--accent-pink));
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -145,11 +152,9 @@ h2 {
   border-radius: 50%;
   display: inline-block;
 }
-
 .dot.offline {
   background: #555;
 }
-
 .np-content {
   display: flex;
   gap: 10px;
@@ -184,7 +189,6 @@ h2 {
   border-radius: 10px;
   font-weight: 600;
 }
-
 .badge.live {
   background: rgba(255, 78, 69, 0.18);
   color: #ff6b63;
@@ -252,7 +256,6 @@ h2 {
   font-size: 10px;
   color: var(--text-muted);
 }
-
 .np-count-state.saved {
   color: var(--accent-green);
   font-weight: 600;
@@ -307,6 +310,9 @@ select {
   margin-bottom: 10px;
   flex-wrap: wrap;
 }
+.sub-pills.compact-pills {
+  margin-bottom: 7px;
+}
 
 .sub-pill {
   background: #1a1a1a;
@@ -332,6 +338,9 @@ select {
   gap: 7px;
   margin-bottom: 14px;
 }
+.stats-grid.compact-grid {
+  margin-bottom: 8px;
+}
 
 .stat-card {
   background: #1a1a1a;
@@ -346,9 +355,8 @@ select {
   color: var(--text-muted);
   margin-bottom: 3px;
 }
-
 .stat-card strong {
-  font-size: 14px;
+  font-size: 13.5px;
   display: block;
 }
 
@@ -358,7 +366,6 @@ select {
   align-items: center;
   margin-bottom: 8px;
 }
-
 .section-header h2 {
   margin-bottom: 0;
 }
@@ -398,7 +405,13 @@ select {
   max-height: 175px;
 }
 body.full-mode .top-list {
-  max-height: 360px;
+  max-height: 460px;
+}
+body.full-mode .top-list.tall {
+  max-height: 64vh;
+}
+body.full-mode .top-list.compact {
+  max-height: 320px;
 }
 
 .top-item {
@@ -464,6 +477,21 @@ body.full-mode .top-list {
   flex-shrink: 0;
 }
 
+.ch-bar-track {
+  width: 100%;
+  height: 3px;
+  background: #272727;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.ch-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-red), var(--accent-pink));
+  border-radius: 3px;
+}
+
 /* STATS */
 .activity-box {
   background: var(--surface);
@@ -513,21 +541,17 @@ body.full-mode .top-list {
   height: 84px;
   padding-top: 8px;
 }
-
 .hour-bar {
   flex: 1;
   background: linear-gradient(180deg, #ff6b63, var(--accent-pink));
   border-radius: 3px 3px 0 0;
   min-height: 3px;
   opacity: 0.85;
-  transition: height 0.25s ease;
 }
-
 .hour-bar.zero {
   background: #2c2c2c;
   opacity: 0.5;
 }
-
 .hours-labels {
   display: flex;
   justify-content: space-between;
@@ -541,7 +565,6 @@ body.full-mode .top-list {
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
-
 .bd-chip {
   background: #121212;
   border: 1px solid #262626;
@@ -552,12 +575,68 @@ body.full-mode .top-list {
   justify-content: space-between;
   color: #ccc;
 }
-
 .bd-chip strong {
   color: #fff;
 }
 
-/* CALENDARIO */
+/* CALENDARIO + HEATMAP + VISTA ANUAL */
+.cal-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.cal-mode-switch {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.cal-mode-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cal-mode-btn.active {
+  background: #2c2c2c;
+  color: #fff;
+}
+
+.cal-search-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.cal-search-input {
+  width: 100%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 11.5px;
+}
+
+.cal-search-summary {
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  color: #e9d5ff;
+  font-size: 11px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
 .calendar-box {
   background: var(--surface);
   border: 1px solid #282828;
@@ -628,14 +707,14 @@ body.full-mode .top-list {
 
 .cal-day {
   position: relative;
-  height: 32px;
-  width: 32px;
+  height: 34px;
+  width: 34px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
   color: #e5e5e5;
@@ -648,32 +727,271 @@ body.full-mode .top-list {
 }
 .cal-day.other-month {
   color: #555;
+  opacity: 0.55;
 }
 .cal-day.today {
-  border-color: #666;
+  border-color: #777;
 }
 
-.cal-day.has-activity::after {
-  content: "";
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent-green);
-  position: absolute;
-  bottom: 3px;
+/* Heatmap de intensidad */
+.cal-day.heat-1 {
+  background: rgba(74, 222, 128, 0.14);
+}
+.cal-day.heat-2 {
+  background: rgba(74, 222, 128, 0.3);
+}
+.cal-day.heat-3 {
+  background: rgba(74, 222, 128, 0.5);
+  color: #fff;
+  font-weight: 600;
+}
+.cal-day.heat-4 {
+  background: rgba(34, 197, 94, 0.78);
+  color: #052e16;
+  font-weight: 700;
+}
+
+/* Racha consecutiva resaltada */
+.cal-day.in-streak {
+  box-shadow: inset 0 -2px 0 #fbbf24;
+}
+
+/* Buscador de canal/tema en calendario */
+.cal-day.dimmed {
+  opacity: 0.25;
+}
+.cal-day.match-filter {
+  border-color: #d946ef;
+  box-shadow: 0 0 0 1px rgba(217, 70, 239, 0.5);
 }
 
 .cal-day.selected {
-  background: #2e7d32;
-  color: #fff;
+  border: 2px solid #fff !important;
   font-weight: 700;
-  border-color: var(--accent-green);
 }
 
-.cal-day.selected.has-activity::after {
-  background: #fff;
+/* Micro-indicadores Likes / Subs */
+.cal-dots {
+  position: absolute;
+  bottom: 2px;
+  display: flex;
+  gap: 2px;
 }
 
+.cal-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.cal-dot.like {
+  background: #ff6b9d;
+}
+.cal-dot.sub {
+  background: #38bdf8;
+}
+.cal-dot.search {
+  background: #fbbf24;
+}
+
+.cal-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: #888;
+}
+
+.leg-box {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.leg-box.heat-1 {
+  background: rgba(74, 222, 128, 0.16);
+}
+.leg-box.heat-2 {
+  background: rgba(74, 222, 128, 0.34);
+}
+.leg-box.heat-3 {
+  background: rgba(74, 222, 128, 0.56);
+}
+.leg-box.heat-4 {
+  background: rgba(34, 197, 94, 0.85);
+}
+.leg-sep {
+  margin: 0 3px;
+}
+
+.cal-month-stats {
+  margin-bottom: 12px;
+}
+
+.cal-compare-line {
+  background: #181818;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #ccc;
+}
+
+.cal-compare-line.up {
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.3);
+}
+.cal-compare-line.down {
+  color: #fca5a5;
+  border-color: rgba(255, 78, 69, 0.3);
+}
+
+.cal-day-summary {
+  background: #17171d;
+  border: 1px solid #2b2b36;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 11px;
+  color: #cbd5e1;
+  margin-bottom: 8px;
+}
+
+/* Gráfico Lun-Dom del mes */
+.weekday-chart {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  height: 76px;
+  align-items: end;
+  padding-top: 8px;
+}
+
+.wd-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.wd-bar {
+  width: 100%;
+  max-width: 24px;
+  background: linear-gradient(180deg, #4ade80, #22c55e);
+  border-radius: 4px 4px 0 0;
+  min-height: 3px;
+  opacity: 0.75;
+}
+
+.wd-bar.peak {
+  background: linear-gradient(180deg, #ff6b63, var(--accent-pink));
+  opacity: 1;
+}
+
+.wd-bar.zero {
+  background: #2a2a2a;
+  opacity: 0.5;
+}
+.wd-lbl {
+  font-size: 10px;
+  color: #999;
+  font-weight: 600;
+}
+
+/* Vista Anual 365 días */
+.cal-year-stats {
+  font-size: 11.5px;
+  color: #bbb;
+  margin-bottom: 10px;
+}
+
+.year-heatmap-scroll {
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.year-heatmap-grid {
+  display: grid;
+  grid-template-rows: repeat(7, 10px);
+  grid-auto-flow: column;
+  grid-auto-columns: 10px;
+  gap: 3px;
+  width: max-content;
+}
+
+.yr-cell {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #222;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.yr-cell.heat-1 {
+  background: rgba(74, 222, 128, 0.25);
+}
+.yr-cell.heat-2 {
+  background: rgba(74, 222, 128, 0.45);
+}
+.yr-cell.heat-3 {
+  background: rgba(74, 222, 128, 0.7);
+}
+.yr-cell.heat-4 {
+  background: #22c55e;
+}
+.yr-cell.dimmed {
+  opacity: 0.2;
+}
+.yr-cell.match-filter {
+  outline: 1px solid #e879f9;
+}
+.yr-cell.empty-pad {
+  background: transparent;
+  cursor: default;
+}
+
+.year-months-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.yr-month-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.yr-month-card:hover {
+  background: var(--surface-hover);
+  border-color: #444;
+}
+.yr-month-card.empty {
+  opacity: 0.45;
+}
+.yr-m-name {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+  margin-bottom: 2px;
+}
+.yr-m-meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* Semanas */
 .cal-section {
   margin-bottom: 14px;
 }
@@ -709,7 +1027,7 @@ body.full-mode .top-list {
 .week-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 .week-meta {
   font-size: 11px;
@@ -748,47 +1066,6 @@ footer {
   font-size: 11px;
   cursor: pointer;
 }
-
 .danger-link:hover {
   color: #ff5555;
-}
-
-/* Pulido visual: quitar recuadros blancos de clic y aprovechar pantalla completa */
-button:focus {
-  outline: none;
-}
-
-button:focus-visible {
-  box-shadow: 0 0 0 2px rgba(255, 107, 99, 0.55);
-}
-
-body.full-mode .top-list {
-  max-height: 460px;
-}
-
-body.full-mode .top-list.tall {
-  max-height: 64vh;
-}
-
-body.full-mode .top-list.compact {
-  max-height: 320px;
-}
-
-.sub-pills.compact-pills {
-  margin-bottom: 7px;
-}
-
-.ch-bar-track {
-  width: 100%;
-  height: 3px;
-  background: #272727;
-  border-radius: 3px;
-  overflow: hidden;
-  margin-top: 4px;
-}
-
-.ch-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent-red), var(--accent-pink));
-  border-radius: 3px;
 }
