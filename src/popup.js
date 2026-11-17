@@ -48,6 +48,9 @@ const dom = {
   npBarFill: $("npBarFill"),
   npTime: $("npTime"),
   npCountState: $("npCountState"),
+  npOtherWrap: $("npOtherWrap"),
+  npOtherHeader: $("npOtherHeader"),
+  npOtherList: $("npOtherList"),
 
   totalTime: $("totalTime"),
   totalPlays: $("totalPlays"),
@@ -160,6 +163,7 @@ const uiState = {
   calDayMode: "all",
   channelSort: "time",
   channelMinSec: 0,
+  pinnedNpTabId: null,
   topVideoIds: [],
   monthTopVideoIds: [],
   summaryCardData: null,
@@ -175,6 +179,7 @@ const store = {
 };
 
 const npTabsMap = new Map();
+const openBrowserTabs = new Map();
 
 let statusTimer = null;
 function showStatus(msg, isError = false) {
@@ -287,7 +292,25 @@ function renderSearchRow(s) {
   );
 }
 
-// --- TARJETA EN VIVO ---
+// --- TARJETA EN VIVO + VENTANAS REALES ABIERTAS ---
+async function syncOpenTabs() {
+  try {
+    const allTabs = await chrome.tabs.query({});
+    openBrowserTabs.clear();
+    for (const t of allTabs) {
+      const u = t.url || t.pendingUrl || "";
+      if (
+        u.startsWith("https://www.youtube.com/") ||
+        u.startsWith("https://music.youtube.com/")
+      ) {
+        openBrowserTabs.set(t.id, t);
+      }
+    }
+  } catch {
+    // Ignorar si no hay permiso tabs
+  }
+}
+
 function renderNowPlaying(np) {
   if (!np) {
     dom.npEmpty.hidden = false;
@@ -355,14 +378,100 @@ function renderNowPlaying(np) {
   }
 }
 
+function renderOtherOpenTabs(others) {
+  if (others.length === 0) {
+    dom.npOtherWrap.hidden = true;
+    dom.npOtherList.replaceChildren();
+    return;
+  }
+
+  dom.npOtherWrap.hidden = false;
+  dom.npOtherHeader.textContent = `Otras pestañas abiertas (${others.length})`;
+
+  dom.npOtherList.replaceChildren(
+    ...others.map((tab) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "np-other-btn";
+      btn.title = "Clic para ver en la tarjeta principal";
+
+      const st = document.createElement("span");
+      st.className = tab.paused ? "np-other-state" : "np-other-state playing";
+      st.textContent = tab.paused ? "⏸" : "▶";
+
+      const img = document.createElement("img");
+      img.className = "np-other-thumb";
+      if (tab.artwork) img.src = tab.artwork;
+      img.alt = "";
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+
+      const title = document.createElement("div");
+      title.className = "np-other-title";
+      title.textContent = tab.title;
+
+      const srcLabel = tab.source === "yt_music" ? "YT Music" : "YouTube";
+      const sub = document.createElement("div");
+      sub.className = "np-other-sub";
+      sub.textContent = `${srcLabel} · ${tab.artist}`;
+
+      meta.append(title, sub);
+
+      const time = document.createElement("span");
+      time.className = "np-other-time";
+      time.textContent =
+        tab.duration > 0
+          ? `${formatClock(tab.currentTime)} / ${formatClock(tab.duration)}`
+          : formatClock(tab.currentTime);
+
+      const children = [st, img, meta, time];
+
+      if (tab.tabId != null && openBrowserTabs.has(tab.tabId)) {
+        const jumpBtn = document.createElement("span");
+        jumpBtn.className = "np-other-time";
+        jumpBtn.textContent = "↗";
+        jumpBtn.title = "Ir a esta pestaña en Chrome";
+        jumpBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const realTab = openBrowserTabs.get(tab.tabId);
+          if (realTab) {
+            chrome.tabs.update(realTab.id, { active: true });
+            chrome.windows.update(realTab.windowId, { focused: true });
+          }
+        });
+        children.push(jumpBtn);
+      }
+
+      btn.append(...children);
+      btn.addEventListener("click", () => {
+        uiState.pinnedNpTabId = tab.storageKey || tab.tabId;
+        renderBestNowPlaying();
+      });
+
+      li.append(btn);
+      return li;
+    }),
+  );
+}
+
 function renderBestNowPlaying() {
   const now = Date.now();
-  const candidates = [...npTabsMap.values()].filter((v) =>
-    v.paused ? now - v.updatedAt < 3600000 : now - v.updatedAt < 10000,
-  );
+  const candidates = [...npTabsMap.values()].filter((v) => {
+    if (v.tabId != null) {
+      if (!openBrowserTabs.has(v.tabId)) return false;
+      return v.paused
+        ? now - v.updatedAt < 43200000
+        : now - v.updatedAt < 90000;
+    }
+    return now - v.updatedAt < 15000;
+  });
 
   if (candidates.length === 0) {
+    uiState.pinnedNpTabId = null;
     renderNowPlaying(null);
+    renderOtherOpenTabs([]);
     return;
   }
 
@@ -372,7 +481,20 @@ function renderBestNowPlaying() {
     return b.updatedAt - a.updatedAt;
   });
 
-  renderNowPlaying(candidates[0]);
+  const pinned =
+    uiState.pinnedNpTabId != null
+      ? candidates.find(
+          (c) => (c.storageKey || c.tabId) === uiState.pinnedNpTabId,
+        )
+      : null;
+  const primary = pinned || candidates[0];
+  const primaryKey = primary.storageKey || primary.tabId;
+  const others = candidates.filter(
+    (c) => (c.storageKey || c.tabId) !== primaryKey,
+  );
+
+  renderNowPlaying(primary);
+  renderOtherOpenTabs(others);
 }
 
 // --- FILTROS ---
@@ -875,7 +997,6 @@ function renderChannelsTab() {
   dom.chTotalVisits.textContent = String(filteredVisits.length);
   dom.chNewSubs.textContent = `🔔 ${newSubsCount}`;
 
-  // 1. Sección dedicada: Top canales por duración reproducida
   const withTime = allChannels
     .filter((c) => c.seconds > 0)
     .sort((a, b) => b.seconds - a.seconds || b.plays - a.plays);
@@ -902,7 +1023,6 @@ function renderChannelsTab() {
     }),
   );
 
-  // 2. Ranking general con filtros (Duración / Visitas / Reprod + duración mínima)
   const filtered = allChannels.filter(
     (ch) => ch.seconds >= uiState.channelMinSec,
   );
@@ -941,7 +1061,6 @@ function renderChannelsTab() {
     }),
   );
 
-  // 3. Últimas visitas directas
   dom.channelsRecentEmpty.hidden = filteredVisits.length > 0;
   const recentVisits = [...filteredVisits]
     .sort((a, b) => b.timestamp - a.timestamp)
@@ -1319,16 +1438,32 @@ dom.clearBtn.addEventListener("click", async () => {
   showStatus("✓ Historial local borrado.");
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+chrome.tabs.onRemoved.addListener((tabId) => {
+  openBrowserTabs.delete(tabId);
+  npTabsMap.delete(`np_${tabId}`);
+  renderBestNowPlaying();
+});
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
 
   let npChanged = false;
+  let needTabSync = false;
   let dataChanged = false;
 
   for (const [key, change] of Object.entries(changes)) {
     if (key.startsWith("np_")) {
-      if (change.newValue) npTabsMap.set(key, change.newValue);
-      else npTabsMap.delete(key);
+      if (change.newValue) {
+        npTabsMap.set(key, change.newValue);
+        if (
+          change.newValue.tabId != null &&
+          !openBrowserTabs.has(change.newValue.tabId)
+        ) {
+          needTabSync = true;
+        }
+      } else {
+        npTabsMap.delete(key);
+      }
       npChanged = true;
     } else if (
       [
@@ -1344,12 +1479,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
   }
 
+  if (needTabSync) await syncOpenTabs();
   if (npChanged) renderBestNowPlaying();
   if (dataChanged) invalidateAllTabs();
 });
 
 async function init() {
-  const all = await chrome.storage.local.get(null);
+  const [all] = await Promise.all([
+    chrome.storage.local.get(null),
+    syncOpenTabs(),
+  ]);
 
   store.history = Array.isArray(all.history) ? all.history : [];
   store.channelVisits = Array.isArray(all.channelVisits)
@@ -1364,8 +1503,17 @@ async function init() {
   const now = Date.now();
   for (const [key, val] of Object.entries(all)) {
     if (!key.startsWith("np_") || !val) continue;
-    if (now - (val.updatedAt || 0) > 3600000) staleKeys.push(key);
-    else npTabsMap.set(key, val);
+    if (key.startsWith("np_fb_")) {
+      if (now - (val.updatedAt || 0) < 15000) npTabsMap.set(key, val);
+      else staleKeys.push(key);
+    } else {
+      const idPart = Number(key.slice(3));
+      if (!Number.isInteger(idPart) || !openBrowserTabs.has(idPart)) {
+        staleKeys.push(key);
+      } else {
+        npTabsMap.set(key, val);
+      }
+    }
   }
   if (staleKeys.length > 0) chrome.storage.local.remove(staleKeys);
 

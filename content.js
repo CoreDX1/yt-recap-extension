@@ -1,4 +1,8 @@
 (() => {
+  if (typeof window.__ytRecapCleanup === "function") {
+    window.__ytRecapCleanup();
+  }
+
   const CONFIG = {
     MIN_SECONDS_TO_COUNT: 20,
     MIN_SECONDS_ON_LOOP: 3,
@@ -10,12 +14,30 @@
 
   const isMusic = location.hostname === "music.youtube.com";
   const source = isMusic ? "yt_music" : "youtube";
-  const tabInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const npStorageKey = `np_${tabInstanceId}`;
+  const ac = new AbortController();
+
+  function getFallbackKey() {
+    try {
+      let id = sessionStorage.getItem("yt_recap_fb_id");
+      if (!id) {
+        id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        sessionStorage.setItem("yt_recap_fb_id", id);
+      }
+      return `np_fb_${id}`;
+    } catch {
+      return `np_fb_${Date.now()}`;
+    }
+  }
+
+  const fallbackNpKey = getFallbackKey();
+  let realTabId = null;
+  let npStorageKey = "";
+  let tabIdPromise = null;
 
   const state = {
     session: null,
-    lastPausedReported: null,
+    lastReportedSignature: "",
+    activeNpKey: "",
     channelVisit: null,
     pendingChannel: null,
     activeSearchKey: null,
@@ -27,7 +49,11 @@
   const fetchingCategories = new Set();
   const boundVideos = new WeakSet();
 
-  // --- SEGURIDAD DE CONTEXTO Y COLA DE STORAGE ---
+  window.__ytRecapCleanup = () => {
+    if (state.timerId) clearInterval(state.timerId);
+    ac.abort();
+  };
+
   function isContextValid() {
     return Boolean(
       typeof chrome !== "undefined" &&
@@ -38,9 +64,39 @@
 
   function stopIfInvalid() {
     if (isContextValid()) return false;
-    if (state.timerId) clearInterval(state.timerId);
+    window.__ytRecapCleanup();
     return true;
   }
+
+  function ensureTabId() {
+    if (realTabId != null) return Promise.resolve(realTabId);
+    if (tabIdPromise) return tabIdPromise;
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+      return Promise.resolve(null);
+    }
+
+    tabIdPromise = chrome.runtime
+      .sendMessage({ type: "GET_TAB_ID" })
+      .then((res) => {
+        if (res?.tabId != null) {
+          realTabId = res.tabId;
+          npStorageKey = `np_${realTabId}`;
+          if (state.activeNpKey === fallbackNpKey) {
+            chrome.storage.local.remove(fallbackNpKey).catch(() => {});
+            state.lastReportedSignature = "";
+          }
+        }
+        return realTabId;
+      })
+      .catch(() => null)
+      .finally(() => {
+        tabIdPromise = null;
+      });
+
+    return tabIdPromise;
+  }
+
+  ensureTabId();
 
   function enqueueStorage(fn) {
     if (stopIfInvalid()) return saveQueue;
@@ -50,7 +106,7 @@
           .toLowerCase()
           .includes("context invalidated")
       ) {
-        if (state.timerId) clearInterval(state.timerId);
+        window.__ytRecapCleanup();
         return;
       }
       console.error("[YT Recap] Error de almacenamiento:", err);
@@ -180,7 +236,7 @@
       if (info) publishNowPlaying(video, info);
     };
     ["play", "pause", "ended", "ratechange", "volumechange"].forEach((evt) => {
-      video.addEventListener(evt, sync, { passive: true });
+      video.addEventListener(evt, sync, { passive: true, signal: ac.signal });
     });
   }
 
@@ -228,10 +284,11 @@
       channelUrl = channelEl?.href || "";
     }
 
-    const docTitle = document.title
+    let docTitle = document.title
       .replace(/^\(\d+\)\s*/, "")
       .replace(/\s*-\s*YouTube(\s+Music)?$/i, "")
       .trim();
+    if (/^YouTube(\s+Music)?$/i.test(docTitle)) docTitle = "";
 
     const title = isMusic
       ? metaTitle || domTitle || docTitle
@@ -306,7 +363,7 @@
         .find(
           (s) => s.normalized === entry.normalized && s.source === entry.source,
         );
-      if (lastSame && entry.timestamp - lastSame.timestamp < 30000) return;
+      if (lastSame && entry.timestamp - lastSame.timestamp < 300000) return;
       searches.push(entry);
       if (searches.length > CONFIG.MAX_SEARCHES) {
         searches.splice(0, searches.length - CONFIG.MAX_SEARCHES);
@@ -423,7 +480,7 @@
         }, 550);
       }
     },
-    true,
+    { capture: true, signal: ac.signal },
   );
 
   // --- CANALES ---
@@ -698,16 +755,26 @@
   async function publishNowPlaying(video, info) {
     if (stopIfInvalid() || !video || !info) return;
 
+    if (!npStorageKey) {
+      await ensureTabId();
+    }
+    const targetKey = npStorageKey || fallbackNpKey;
+    if (stopIfInvalid()) return;
+
     try {
       const isPaused = Boolean(video.paused || video.ended);
-      if (isPaused && state.lastPausedReported === true) return;
+      const isVisible = document.visibilityState === "visible";
+      const sig = `${targetKey}|${isPaused}|${isVisible}|${info.videoId}|${info.title}`;
+      if (isPaused && state.lastReportedSignature === sig) return;
 
-      state.lastPausedReported = isPaused;
+      state.lastReportedSignature = sig;
+      state.activeNpKey = targetKey;
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
 
       await chrome.storage.local.set({
-        [npStorageKey]: {
-          tabInstanceId,
+        [targetKey]: {
+          tabId: realTabId,
+          storageKey: targetKey,
           title: info.title,
           artist: info.artist,
           album: info.album || "",
@@ -720,7 +787,7 @@
           currentTime: Math.floor(video.currentTime || 0),
           duration: Math.floor(dur),
           paused: isPaused,
-          visible: document.visibilityState === "visible",
+          visible: isVisible,
           muted: Boolean(video.muted || video.volume === 0),
           playbackRate: Number((video.playbackRate || 1).toFixed(2)),
           loopActive: Boolean(video.loop),
@@ -738,7 +805,7 @@
           .toLowerCase()
           .includes("context invalidated")
       ) {
-        if (state.timerId) clearInterval(state.timerId);
+        window.__ytRecapCleanup();
       }
     }
   }
@@ -753,7 +820,15 @@
     if (video) bindVideoListeners(video);
 
     const info = getTrackInfo();
-    if (!video || !info) return;
+    if (!video || !info) {
+      if (state.activeNpKey) {
+        const keyToRemove = state.activeNpKey;
+        state.activeNpKey = "";
+        state.lastReportedSignature = "";
+        chrome.storage.local.remove(keyToRemove).catch(() => {});
+      }
+      return;
+    }
 
     if (video.paused || video.ended || video.readyState < 2) {
       publishNowPlaying(video, info);
@@ -804,29 +879,37 @@
     publishNowPlaying(video, info);
   }, CONFIG.TICK_MS);
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && state.session) {
-      upsertSession(state.session, true);
-    }
-    const video = getActiveVideo();
-    const info = getTrackInfo();
-    if (video && info) {
-      state.lastPausedReported = null;
-      publishNowPlaying(video, info);
-    }
-  });
-
-  window.addEventListener("pagehide", async () => {
-    if (state.session) {
-      finalizeSession(state.session);
-      state.session = null;
-    }
-    if (isContextValid()) {
-      try {
-        await chrome.storage.local.remove(npStorageKey);
-      } catch {
-        // Ignorar al cerrar pestaña
+  document.addEventListener(
+    "visibilitychange",
+    () => {
+      if (document.visibilityState === "hidden" && state.session) {
+        upsertSession(state.session, true);
       }
-    }
-  });
+      const video = getActiveVideo();
+      const info = getTrackInfo();
+      if (video && info) {
+        state.lastReportedSignature = "";
+        publishNowPlaying(video, info);
+      }
+    },
+    { signal: ac.signal },
+  );
+
+  window.addEventListener(
+    "pagehide",
+    async () => {
+      if (state.session) {
+        finalizeSession(state.session);
+        state.session = null;
+      }
+      if (state.activeNpKey && isContextValid()) {
+        try {
+          await chrome.storage.local.remove(state.activeNpKey);
+        } catch {
+          // Ignorar
+        }
+      }
+    },
+    { signal: ac.signal },
+  );
 })();
