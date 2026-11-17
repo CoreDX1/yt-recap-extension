@@ -11,6 +11,7 @@
   const isMusic = location.hostname === "music.youtube.com";
   const source = isMusic ? "yt_music" : "youtube";
   const tabInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const npStorageKey = `np_${tabInstanceId}`;
 
   const state = {
     session: null,
@@ -699,26 +700,13 @@
 
     try {
       const isPaused = Boolean(video.paused || video.ended);
-      if (isPaused) {
-        if (state.lastPausedReported === true) return;
-        const { nowPlaying } = await chrome.storage.local.get({
-          nowPlaying: null,
-        });
-        if (
-          nowPlaying &&
-          nowPlaying.tabInstanceId !== tabInstanceId &&
-          !nowPlaying.paused &&
-          Date.now() - nowPlaying.updatedAt < 3000
-        ) {
-          return;
-        }
-      }
+      if (isPaused && state.lastPausedReported === true) return;
 
       state.lastPausedReported = isPaused;
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
 
       await chrome.storage.local.set({
-        nowPlaying: {
+        [npStorageKey]: {
           tabInstanceId,
           title: info.title,
           artist: info.artist,
@@ -732,6 +720,7 @@
           currentTime: Math.floor(video.currentTime || 0),
           duration: Math.floor(dur),
           paused: isPaused,
+          visible: document.visibilityState === "visible",
           muted: Boolean(video.muted || video.volume === 0),
           playbackRate: Number((video.playbackRate || 1).toFixed(2)),
           loopActive: Boolean(video.loop),
@@ -819,6 +808,12 @@
     if (document.visibilityState === "hidden" && state.session) {
       upsertSession(state.session, true);
     }
+    const video = getActiveVideo();
+    const info = getTrackInfo();
+    if (video && info) {
+      state.lastPausedReported = null;
+      publishNowPlaying(video, info);
+    }
   });
 
   window.addEventListener("pagehide", async () => {
@@ -828,12 +823,7 @@
     }
     if (isContextValid()) {
       try {
-        const { nowPlaying } = await chrome.storage.local.get({
-          nowPlaying: null,
-        });
-        if (nowPlaying?.tabInstanceId === tabInstanceId) {
-          await chrome.storage.local.remove("nowPlaying");
-        }
+        await chrome.storage.local.remove(npStorageKey);
       } catch {
         // Ignorar al cerrar pestaña
       }

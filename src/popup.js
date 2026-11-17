@@ -1,8 +1,6 @@
 import {
   translateCategory,
   toDateKey,
-  extractIdFromItem,
-  getGroupKey,
   resolveVideoUrl,
   openInstantPlaylist,
   formatClock,
@@ -12,6 +10,7 @@ import {
   matchesFilter,
   matchesPeriodAndSourceOnly,
   aggregateTracks,
+  getGroupKey,
   sanitizeFileSlug,
   getExtFromMime,
 } from "./utils.js";
@@ -145,6 +144,8 @@ const store = {
   searches: [],
 };
 
+const npTabsMap = new Map();
+
 let statusTimer = null;
 function showStatus(msg, isError = false) {
   dom.statusBanner.textContent = msg;
@@ -240,10 +241,9 @@ function renderSearchRow(s) {
   );
 }
 
-// --- TARJETA EN VIVO ---
+// --- TARJETA EN VIVO (MULTI-PESTAÑA) ---
 function renderNowPlaying(np) {
-  const isStale = !np || (!np.paused && Date.now() - np.updatedAt > 6000);
-  if (isStale) {
+  if (!np) {
     dom.npEmpty.hidden = false;
     dom.npContent.hidden = true;
     return;
@@ -307,6 +307,26 @@ function renderNowPlaying(np) {
     dom.npCountState.textContent = `Cuenta en ${remaining}s`;
     dom.npCountState.classList.remove("saved");
   }
+}
+
+function renderBestNowPlaying() {
+  const now = Date.now();
+  const candidates = [...npTabsMap.values()].filter((v) =>
+    v.paused ? now - v.updatedAt < 3600000 : now - v.updatedAt < 10000,
+  );
+
+  if (candidates.length === 0) {
+    renderNowPlaying(null);
+    return;
+  }
+
+  candidates.sort((a, b) => {
+    if (a.paused !== b.paused) return a.paused ? 1 : -1;
+    if (a.visible !== b.visible) return a.visible ? -1 : 1;
+    return b.updatedAt - a.updatedAt;
+  });
+
+  renderNowPlaying(candidates[0]);
 }
 
 // --- RENDER DE PESTAÑAS ---
@@ -562,7 +582,6 @@ function renderActivityTab() {
     }
   }
 
-  // Categorías
   const catEntries = [...categoriesMap.entries()].sort(
     (a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays,
   );
@@ -602,7 +621,6 @@ function renderActivityTab() {
     );
   }
 
-  // Horas
   const maxHourSec = Math.max(...hoursBuckets);
   dom.hoursChart.replaceChildren(
     ...hoursBuckets.map((sec, h) => {
@@ -616,7 +634,6 @@ function renderActivityTab() {
     }),
   );
 
-  // Chips resumen
   const avgRate =
     rateCount > 0
       ? `${(rateSum / rateCount).toFixed(2).replace(/\.00$/, "")}x`
@@ -648,7 +665,6 @@ function renderActivityTab() {
     }),
   );
 
-  // Top Búsquedas
   dom.searchesBox.hidden = filteredSearches.length === 0;
   if (filteredSearches.length > 0) {
     const sMap = new Map();
@@ -682,7 +698,6 @@ function renderActivityTab() {
     );
   }
 
-  // Top Álbumes
   const topAlbums = [...albumsMap.values()]
     .sort((a, b) => b.plays - a.plays || b.seconds - a.seconds)
     .slice(0, 5);
@@ -701,7 +716,6 @@ function renderActivityTab() {
     );
   }
 
-  // Top Artistas
   const topArtists = [...artistsMap.entries()]
     .sort((a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays)
     .slice(0, 5);
@@ -720,7 +734,6 @@ function renderActivityTab() {
     ),
   );
 
-  // Skips
   dom.skipsBox.hidden = filteredSkips.length === 0;
   if (filteredSkips.length > 0) {
     const skipsMap = new Map();
@@ -867,7 +880,6 @@ function renderCalendarTab() {
     }),
   );
 
-  // Detalle del día
   const [sy, sm, sd] = uiState.selectedDateKey.split("-").map(Number);
   const formattedDay = new Intl.DateTimeFormat("es-AR", {
     weekday: "long",
@@ -936,7 +948,6 @@ function renderCalendarTab() {
     }),
   );
 
-  // Top del mes
   const inViewedMonth = (item) => {
     const d = new Date(item.timestamp);
     return (
@@ -1031,7 +1042,6 @@ function renderCalendarTab() {
     );
   }
 
-  // Semanas del mes
   const weekRanges = [
     { num: 1, start: 1, end: 7 },
     { num: 2, start: 8, end: 14 },
@@ -1279,7 +1289,6 @@ dom.exportBtn.addEventListener("click", async () => {
   dom.exportBtn.textContent = "⏳...";
 
   try {
-    // Asegurar summaryCardData actualizado aunque el usuario esté en otra pestaña
     if (uiState.dirtyTabs.has("summary")) renderSummaryTab();
 
     const imageTasks = [];
@@ -1518,42 +1527,59 @@ dom.clearBtn.addEventListener("click", async () => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.nowPlaying) renderNowPlaying(changes.nowPlaying.newValue);
 
+  let npChanged = false;
   let dataChanged = false;
-  for (const key of [
-    "history",
-    "channelVisits",
-    "skips",
-    "interactions",
-    "searches",
-  ]) {
-    if (changes[key]) {
-      store[key] = changes[key].newValue || [];
+
+  for (const [key, change] of Object.entries(changes)) {
+    if (key.startsWith("np_")) {
+      if (change.newValue) npTabsMap.set(key, change.newValue);
+      else npTabsMap.delete(key);
+      npChanged = true;
+    } else if (
+      [
+        "history",
+        "channelVisits",
+        "skips",
+        "interactions",
+        "searches",
+      ].includes(key)
+    ) {
+      store[key] = change.newValue || [];
       dataChanged = true;
     }
   }
+
+  if (npChanged) renderBestNowPlaying();
   if (dataChanged) invalidateAllTabs();
 });
 
 async function init() {
-  const data = await chrome.storage.local.get({
-    history: [],
-    channelVisits: [],
-    skips: [],
-    interactions: [],
-    searches: [],
-    nowPlaying: null,
-  });
+  const all = await chrome.storage.local.get(null);
 
-  store.history = data.history;
-  store.channelVisits = data.channelVisits;
-  store.skips = data.skips;
-  store.interactions = data.interactions;
-  store.searches = data.searches;
+  store.history = Array.isArray(all.history) ? all.history : [];
+  store.channelVisits = Array.isArray(all.channelVisits)
+    ? all.channelVisits
+    : [];
+  store.skips = Array.isArray(all.skips) ? all.skips : [];
+  store.interactions = Array.isArray(all.interactions) ? all.interactions : [];
+  store.searches = Array.isArray(all.searches) ? all.searches : [];
 
-  renderNowPlaying(data.nowPlaying);
+  npTabsMap.clear();
+  const staleKeys = [];
+  const now = Date.now();
+  for (const [key, val] of Object.entries(all)) {
+    if (!key.startsWith("np_") || !val) continue;
+    if (now - (val.updatedAt || 0) > 3600000) staleKeys.push(key);
+    else npTabsMap.set(key, val);
+  }
+  if (staleKeys.length > 0) chrome.storage.local.remove(staleKeys);
+
+  renderBestNowPlaying();
   invalidateAllTabs();
+
+  // Revisar cada 3s en memoria por si alguna pestaña se cerró sin disparar pagehide
+  setInterval(renderBestNowPlaying, 3000);
 
   if (isFullMode && urlParams.get("import") === "1") {
     showStatus(
