@@ -167,34 +167,23 @@
   }
 
   /* Layout multi-columna Bento en modo completo */
-  body.full-mode #tab-activity:not([hidden]),
-  body.full-mode #tab-channels:not([hidden]),
-  body.full-mode #tab-likes:not([hidden]),
-  body.full-mode #calMonthView:not([hidden]) {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-5);
-    align-items: start;
-  }
-
-  body.full-mode #tab-activity .activity-box,
-  body.full-mode #tab-channels .cal-section,
-  body.full-mode #tab-likes .cal-section,
-  body.full-mode #calMonthView .cal-section,
-  body.full-mode #calMonthView .activity-box {
-    margin-bottom: 0;
+  body.full-mode #tab-activity:not([hidden]) {
+    align-items: stretch;
   }
 
   body.full-mode #tab-channels .stats-grid,
   body.full-mode #tab-likes .stats-grid,
   body.full-mode #tab-activity .activity-box:has(#hoursChart),
-  body.full-mode #tab-activity .activity-box:has(#topArtistsList),
   body.full-mode #tab-channels .cal-section:last-child,
   body.full-mode #tab-likes .cal-section:last-child,
   body.full-mode #calMonthView .calendar-box,
   body.full-mode #calMonthView .cal-month-stats,
   body.full-mode #calMonthView .cal-section {
     grid-column: 1 / -1;
+  }
+
+  body.full-mode #tab-activity .activity-box:has(#hoursChart) {
+    order: -1;
   }
 
   .title-row {
