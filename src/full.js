@@ -1,4 +1,7 @@
-// src/full.js
+// src/full.js — v2.5.1
+// PATCH B: mount síncrono de shelves visibles + persistencia de scrollLeft.
+// PATCH C: firmas struct/metrics, update in-place, debounce mayor, memo de VMs,
+//          gate de calendario y cleanup explícito en pagehide.
 import {
   translateCategory,
   toDateKey,
@@ -73,11 +76,21 @@ const state = {
   searchIndex: -1,
   lastRoute: null,
   lastScope: null,
+  sigs: null,
 };
 
 const store = emptyStore();
 const npService = new NowPlaying();
 const observers = new Set();
+
+// PATCH B: posición horizontal de cada shelf, keyed por scope|ruta|período|título.
+const shelfScroll = new Map();
+const pendingShelves = [];
+const mountedRows = new Map();
+
+// PATCH C: memo de view-models por firma de datos.
+let memoSigKey = null;
+const memo = new Map();
 
 const calUi = {
   calViewMode: "month",
@@ -163,6 +176,8 @@ const els = {
 // ---------- helpers ----------
 const toastQueue = [];
 let toastBusy = false;
+let toastTimer = null;
+let toastGapTimer = null;
 function toast(msg, isError = false) {
   toastQueue.push({ msg, isError });
   if (!toastBusy) nextToast();
@@ -178,9 +193,9 @@ function nextToast() {
   els.toastIcon.innerHTML = icon(item.isError ? "alert" : "check", 15);
   els.toast.classList.toggle("error", item.isError);
   els.toast.hidden = false;
-  setTimeout(() => {
+  toastTimer = setTimeout(() => {
     els.toast.hidden = true;
-    setTimeout(nextToast, 160);
+    toastGapTimer = setTimeout(nextToast, 160);
   }, 3200);
 }
 
@@ -273,6 +288,116 @@ function highlight(text, q) {
   frag.append(text.slice(idx + q.length));
   return frag;
 }
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+// ---------- PATCH C: firmas de datos ----------
+function computeSigs() {
+  const plays = periodPlays();
+  const inter = meta(store.interactions);
+  const searches = meta(store.searches);
+  const visits = meta(store.channelVisits);
+
+  let sh = 0;
+  for (const p of plays) {
+    sh =
+      (sh * 31 +
+        hashStr(
+          `${p.trackKey}|${p.title}|${p.artist}|${p.contentType}|${p.category}|${p.isMusic ? 1 : 0}`,
+        )) |
+      0;
+  }
+  let ih = 0;
+  for (const it of inter) ih = (ih * 31 + hashStr(it.id + it.type)) | 0;
+  let se = 0;
+  for (const s of searches) se = (se * 31 + hashStr(s.id)) | 0;
+  let vi = 0;
+  for (const v of visits) vi = (vi * 31 + hashStr(v.id)) | 0;
+
+  let struct = `${state.scope}|${state.route}|${state.period}|${plays.length}|${sh}|${inter.length}|${ih}|${searches.length}|${se}|${visits.length}|${vi}`;
+
+  // Calendario: solo re-render si cambia la estructura o el bucket de heat,
+  // no en cada tick de segundos.
+  if (state.route === "calendar") {
+    const buckets = new Map();
+    const touch = (k) => {
+      if (!buckets.has(k)) buckets.set(k, { sec: 0 });
+    };
+    for (const p of allPlays()) {
+      const k = toDateKey(new Date(p.timestamp));
+      const b = buckets.get(k) || { sec: 0 };
+      b.sec += p.seconds || 0;
+      buckets.set(k, b);
+    }
+    for (const it of metaAll(store.interactions))
+      touch(toDateKey(new Date(it.timestamp)));
+    for (const s of metaAll(store.searches))
+      touch(toDateKey(new Date(s.timestamp)));
+    let hh = 0;
+    const keys = [...buckets.keys()].sort();
+    for (const k of keys) {
+      const sec = buckets.get(k).sec;
+      const level = sec >= 7200 ? 4 : sec >= 2700 ? 3 : sec >= 900 ? 2 : 1;
+      hh = (hh * 31 + hashStr(`${k}:${level}`)) | 0;
+    }
+    struct += `|cal${hh}`;
+  }
+
+  let totalSeconds = 0;
+  let loops = 0;
+  const hours = new Array(24).fill(0);
+  for (const p of plays) {
+    totalSeconds += p.seconds || 0;
+    if (p.isLoop) loops += 1;
+    hours[new Date(p.timestamp).getHours()] += p.seconds || 0;
+  }
+  const peak = hours.indexOf(Math.max(...hours));
+  const metrics = `${totalSeconds}|${loops}|${peak}`;
+  return { struct, metrics };
+}
+
+function memoVM(tag, fn) {
+  const sigKey = `${state.sigs?.struct}|${state.sigs?.metrics}`;
+  if (memoSigKey !== sigKey) {
+    memo.clear();
+    memoSigKey = sigKey;
+  }
+  if (!memo.has(tag)) memo.set(tag, fn());
+  return memo.get(tag);
+}
+const vmSummary = () => memoVM("summary", () => summaryVM(periodPlays()));
+const vmHome = () =>
+  memoVM("home", () =>
+    homeVM(
+      periodPlays(),
+      allPlays(),
+      metaAll(store.interactions),
+      metaAll(store.searches),
+      metaAll(store.channelVisits),
+    ),
+  );
+const vmActivity = () =>
+  memoVM("activity", () =>
+    activityVM(
+      periodPlays(),
+      meta(store.interactions),
+      meta(store.searches),
+      store.skips.filter((it) =>
+        matchesFilter(it, state.period, scopeValue(), true),
+      ),
+    ),
+  );
+const vmLikes = () =>
+  memoVM("likes", () =>
+    likesVM(meta(store.interactions), meta(store.searches)),
+  );
+const vmChannels = (sort, min) =>
+  memoVM(`channels:${sort}:${min}`, () =>
+    channelsVM(meta(store.channelVisits), periodPlays(), sort, min),
+  );
 
 // ---------- tooltip ----------
 function showTip(text, x, y) {
@@ -324,6 +449,27 @@ window.addEventListener("hashchange", () => {
 });
 
 // ---------- shell ----------
+function renderInlineStats(sum) {
+  els.inlineStats.replaceChildren();
+  if (!sum.empty) {
+    const strong = (t) => {
+      const s = document.createElement("strong");
+      s.textContent = t;
+      return s;
+    };
+    els.inlineStats.append(
+      strong(String(sum.totalPlays)),
+      " rep · ",
+      strong(formatDuration(sum.totalSeconds)),
+      " · ",
+      strong(String(sum.unique)),
+      " únicos",
+    );
+  } else {
+    els.inlineStats.textContent = "Sin datos en este período";
+  }
+}
+
 function renderShell() {
   document.body.dataset.scope = state.scope;
   document.title =
@@ -360,36 +506,12 @@ function renderShell() {
       return b;
     }),
   );
-  const sum = summaryVM(periodPlays());
-  els.inlineStats.replaceChildren();
-  if (!sum.empty) {
-    const strong = (t) => {
-      const s = document.createElement("strong");
-      s.textContent = t;
-      return s;
-    };
-    els.inlineStats.append(
-      strong(String(sum.totalPlays)),
-      " rep · ",
-      strong(formatDuration(sum.totalSeconds)),
-      " · ",
-      strong(String(sum.unique)),
-      " únicos",
-    );
-  } else {
-    els.inlineStats.textContent = "Sin datos en este período";
-  }
+  renderInlineStats(vmSummary());
   renderSideLists();
 }
 
 function renderSideLists() {
-  const vm = homeVM(
-    periodPlays(),
-    allPlays(),
-    metaAll(store.interactions),
-    metaAll(store.searches),
-    metaAll(store.channelVisits),
-  );
+  const vm = vmHome();
   const nodes = [];
   const liked = meta(store.interactions).filter((it) => it.type === "like");
   const likedBtn = document.createElement("button");
@@ -412,6 +534,7 @@ function renderSideLists() {
     const t = document.createElement("strong");
     t.textContent = `${m.label} Recap '${String(m.year).slice(2)}`;
     const s = document.createElement("span");
+    s.dataset.month = `${m.y}-${m.m}`;
     s.textContent = `${formatDuration(m.seconds)} · ${m.plays} rep.`;
     b.append(t, s);
     b.addEventListener("click", () => {
@@ -424,6 +547,43 @@ function renderSideLists() {
     nodes.push(b);
   }
   els.sideLists.replaceChildren(...nodes);
+}
+
+// ---------- PATCH C: actualización in-place de métricas ----------
+function updateMetricsInPlace() {
+  const sum = vmSummary();
+  renderInlineStats(sum);
+
+  const kpis = els.routes.home.querySelectorAll(".hero-kpi strong");
+  if (kpis.length === 4) {
+    kpis[0].textContent = sum.empty
+      ? "0 min"
+      : formatDuration(sum.totalSeconds);
+    kpis[1].textContent = String(sum.empty ? 0 : sum.totalPlays);
+    kpis[2].textContent = String(sum.empty ? 0 : sum.unique);
+    kpis[3].textContent = String(sum.empty ? 0 : sum.streak);
+  }
+
+  const vals = [
+    sum.empty ? "0 min" : formatDuration(sum.totalSeconds),
+    String(sum.empty ? 0 : sum.totalPlays),
+    `🔁 ${sum.empty ? 0 : sum.totalLoops}`,
+    String(sum.empty ? 0 : sum.unique),
+    `${sum.empty ? 0 : sum.streak} días`,
+    sum.empty ? "—" : sum.peakLabel,
+  ];
+  els.routes.explore
+    .querySelectorAll(".explore-grid .stat-card")
+    .forEach((c, i) => {
+      const st = c.querySelector("strong");
+      if (st && vals[i] != null) st.textContent = vals[i];
+    });
+
+  const months = vmHome().months;
+  els.sideLists.querySelectorAll("[data-month]").forEach((sp) => {
+    const m = months.find((x) => `${x.y}-${x.m}` === sp.dataset.month);
+    if (m) sp.textContent = `${formatDuration(m.seconds)} · ${m.plays} rep.`;
+  });
 }
 
 // ---------- cards / shelves ----------
@@ -573,6 +733,7 @@ function enableDrag(row) {
 }
 
 function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
+  const key = `${state.scope}|${state.route}|${state.period}|${title}`;
   const sec = document.createElement("section");
   sec.className = "shelf";
   const head = document.createElement("div");
@@ -616,6 +777,7 @@ function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
   row.setAttribute("role", "group");
   row.setAttribute("aria-label", title);
   row.append(...skeletonRow());
+
   const updateArrows = () => {
     prev.disabled = row.scrollLeft <= 4;
     next.disabled = row.scrollLeft + row.clientWidth >= row.scrollWidth - 4;
@@ -626,7 +788,15 @@ function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
   next.addEventListener("click", () =>
     row.scrollBy({ left: row.clientWidth * 0.8, behavior: "smooth" }),
   );
-  row.addEventListener("scroll", updateArrows, { passive: true });
+  // PATCH B: guardar posición en cada scroll (incluye smooth y drag).
+  row.addEventListener(
+    "scroll",
+    () => {
+      shelfScroll.set(key, row.scrollLeft);
+      updateArrows();
+    },
+    { passive: true },
+  );
   row.addEventListener("keydown", (e) => {
     if (e.key === "ArrowRight") {
       e.preventDefault();
@@ -639,31 +809,49 @@ function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
   });
   enableDrag(row);
 
+  // PATCH B: mount idempotente que restaura la posición guardada.
   const mount = () => {
+    if (sec._mounted) return;
+    sec._mounted = true;
     row.replaceChildren(...cardsFactory());
+    row.scrollLeft = shelfScroll.get(key) || 0;
+    mountedRows.set(row, updateArrows);
     requestAnimationFrame(updateArrows);
   };
-  if ("IntersectionObserver" in window) {
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const en of entries) {
-          if (en.isIntersecting) {
-            mount();
-            io.disconnect();
-            observers.delete(io);
-          }
-        }
-      },
-      { root: els.content, rootMargin: "400px 0px" },
-    );
-    observers.add(io);
-    io.observe(sec);
-  } else {
-    mount();
-  }
-  requestAnimationFrame(updateArrows);
+  pendingShelves.push({ sec, mount });
+
   sec.append(head, row);
   return sec;
+}
+
+// PATCH B: hidratación post-render — síncrono si el shelf ya está en viewport.
+function hydrateShelves() {
+  const cr = els.content.getBoundingClientRect();
+  for (const item of pendingShelves) {
+    const { sec, mount } = item;
+    if (sec._mounted) continue;
+    const r = sec.getBoundingClientRect();
+    const visible = r.top < cr.bottom + 240 && r.bottom > cr.top - 240;
+    if (visible || !("IntersectionObserver" in window)) {
+      mount();
+    } else {
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const en of entries) {
+            if (en.isIntersecting) {
+              mount();
+              io.disconnect();
+              observers.delete(io);
+            }
+          }
+        },
+        { root: els.content, rootMargin: "400px 0px" },
+      );
+      observers.add(io);
+      io.observe(sec);
+    }
+  }
+  pendingShelves.length = 0;
 }
 
 function trackCards(tracks, wide = false) {
@@ -732,14 +920,8 @@ function routeTitle(text) {
 // ---------- rutas ----------
 function renderHome() {
   const plays = periodPlays();
-  const vm = homeVM(
-    plays,
-    allPlays(),
-    metaAll(store.interactions),
-    metaAll(store.searches),
-    metaAll(store.channelVisits),
-  );
-  const sum = summaryVM(plays);
+  const vm = vmHome();
+  const sum = vmSummary();
   const host = els.routes.home;
   host.replaceChildren();
 
@@ -922,15 +1104,8 @@ function statCard(label, value) {
 
 function renderExplore() {
   const plays = periodPlays();
-  const vm = activityVM(
-    plays,
-    meta(store.interactions),
-    meta(store.searches),
-    store.skips.filter((it) =>
-      matchesFilter(it, state.period, scopeValue(), true),
-    ),
-  );
-  const sum = summaryVM(plays);
+  const vm = vmActivity();
+  const sum = vmSummary();
   const host = els.routes.explore;
   host.replaceChildren();
   host.append(routeTitle("Explorar"));
@@ -972,6 +1147,7 @@ function renderExplore() {
       bar.addEventListener("click", () => {
         state.hourFilter = state.hourFilter === h ? null : h;
         renderExplore();
+        hydrateShelves();
       });
       return bar;
     }),
@@ -1171,11 +1347,13 @@ function renderPeople() {
     routeTitle(state.scope === "music" ? "Tus artistas" : "Tus canales"),
   );
   if (state.scope === "music") {
-    const vm = activityVM(
-      periodPlays(),
-      meta(store.interactions),
-      meta(store.searches),
-      [],
+    const vm = memoVM("activityPeople", () =>
+      activityVM(
+        periodPlays(),
+        meta(store.interactions),
+        meta(store.searches),
+        [],
+      ),
     );
     const box = document.createElement("div");
     box.className = "explore-box wide";
@@ -1197,7 +1375,9 @@ function renderPeople() {
     );
     box.append(t, ul);
     host.append(box);
-    const all = homeVM(periodPlays(), allPlays(), [], [], []).artists;
+    const all = memoVM("homePeople", () =>
+      homeVM(periodPlays(), allPlays(), [], [], []),
+    ).artists;
     if (all.length)
       host.append(
         shelf({
@@ -1207,7 +1387,7 @@ function renderPeople() {
       );
     return;
   }
-  const vm = channelsVM(meta(store.channelVisits), periodPlays(), "time", 0);
+  const vm = vmChannels("time", 0);
   const stats = document.createElement("div");
   stats.className = "explore-grid";
   stats.append(
@@ -1261,7 +1441,7 @@ function renderPeople() {
 }
 
 function renderLikes() {
-  const vm = likesVM(meta(store.interactions), meta(store.searches));
+  const vm = vmLikes();
   const host = els.routes.likes;
   host.replaceChildren();
   host.append(routeTitle("Likes y actividad"));
@@ -1331,8 +1511,7 @@ function renderResults() {
     vm.artists.length +
     vm.channels.length +
     vm.searches.length;
-  const head = routeTitle(`Resultados para «${state.q}»`);
-  host.append(head);
+  host.append(routeTitle(`Resultados para «${state.q}»`));
   if (total === 0) {
     host.append(
       emptyBox(`Sin resultados para «${state.q}» en ${scopeName()}.`),
@@ -1389,7 +1568,10 @@ function renderResults() {
 function renderRoute() {
   for (const io of observers) io.disconnect();
   observers.clear();
+  mountedRows.clear();
+  pendingShelves.length = 0;
   hideTip();
+  const savedTop = els.content.scrollTop;
   for (const [key, node] of Object.entries(els.routes))
     node.hidden = key !== state.route;
   switch (state.route) {
@@ -1412,6 +1594,8 @@ function renderRoute() {
       renderResults();
       break;
   }
+  hydrateShelves();
+  els.content.scrollTop = savedTop;
   if (state.lastRoute !== state.route || state.lastScope !== state.scope) {
     els.content.scrollTop = 0;
     const heading = els.routes[state.route].querySelector(".route-title");
@@ -1422,6 +1606,7 @@ function renderRoute() {
 }
 
 function renderAll() {
+  state.sigs = computeSigs();
   if (state.lastScope != null && state.lastScope !== state.scope) {
     els.mainCol.classList.remove("scope-enter");
     void els.mainCol.offsetWidth;
@@ -1430,6 +1615,22 @@ function renderAll() {
   renderShell();
   renderRoute();
   renderPlayer();
+}
+
+// PATCH C: refresh por datos — rebuild solo si cambia la estructura;
+// si solo cambian métricas, actualización in-place sin tocar shelves/grilla.
+function refreshData() {
+  const sigs = computeSigs();
+  const prev = state.sigs;
+  state.sigs = sigs;
+  if (!prev || prev.struct !== sigs.struct) {
+    const top = els.content.scrollTop;
+    renderShell();
+    renderRoute();
+    els.content.scrollTop = top;
+  } else if (prev.metrics !== sigs.metrics) {
+    updateMetricsInPlace();
+  }
 }
 
 // ---------- playerbar ----------
@@ -2011,7 +2212,7 @@ els.exportBtn.addEventListener("click", async () => {
   els.exportBtn.disabled = true;
   els.exportBtn.textContent = "⏳...";
   try {
-    const sum = summaryVM(periodPlays());
+    const sum = vmSummary();
     const cardData = sum.empty
       ? null
       : {
@@ -2087,6 +2288,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   renderPlayer();
 });
 
+// PATCH C: debounce mayor (1200ms) + refresh granular por firmas.
 let dataTimer = null;
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
@@ -2097,14 +2299,32 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (dataChanged) {
     Object.assign(store, updates);
     if (dataTimer) clearTimeout(dataTimer);
-    dataTimer = setTimeout(renderAll, 250);
+    dataTimer = setTimeout(refreshData, 1200);
   }
 });
 
 window.addEventListener("resize", () => {
   hideTip();
+  mountedRows.forEach((fn) => fn());
   if (!els.miniplayer.hidden) applyMiniPos();
 });
+
+// ---------- PATCH C: cleanup explícito ----------
+let playerInterval = null;
+function cleanup() {
+  if (playerInterval) clearInterval(playerInterval);
+  if (dataTimer) clearTimeout(dataTimer);
+  if (searchTimer) clearTimeout(searchTimer);
+  if (volTimer) clearTimeout(volTimer);
+  if (toastTimer) clearTimeout(toastTimer);
+  if (toastGapTimer) clearTimeout(toastGapTimer);
+  for (const io of observers) io.disconnect();
+  observers.clear();
+  mountedRows.clear();
+  pendingShelves.length = 0;
+  hideTip();
+}
+window.addEventListener("pagehide", cleanup);
 
 // ---------- init ----------
 function skeletonHome() {
@@ -2167,7 +2387,7 @@ async function init() {
   if (stale.length) chrome.storage.local.remove(stale);
 
   renderAll();
-  setInterval(renderPlayer, 3000);
+  playerInterval = setInterval(renderPlayer, 3000);
 
   if (urlParams.get("import") === "1") {
     toast(

@@ -12,6 +12,7 @@
     MAX_SKIPS: 1000,
     MAX_SEARCHES: 2000,
     MUSIC_STRICT: false,
+    REMOTE_DISLIKE: false,
   };
 
   const isMusic = location.hostname === "music.youtube.com";
@@ -362,7 +363,22 @@
     };
   }
 
-  // --- CONTROL REMOTO DESDE EL MODO COMPLETO ---
+  // --- ESTADO DE LIKE / CONTROL REMOTO ---
+  const LIKE_SELECTOR =
+    "like-button-view-model button, ytd-toggle-button-renderer#like-button button, #like-button button, ytmusic-like-button-renderer #button-shape-like button, ytmusic-like-button-renderer tp-yt-paper-icon-button.like";
+  const DISLIKE_SELECTOR =
+    "dislike-button-view-model button, ytd-toggle-button-renderer#dislike-button button, #dislike-button button, ytmusic-like-button-renderer #button-shape-dislike button, ytmusic-like-button-renderer tp-yt-paper-icon-button.dislike";
+
+  function findLikeButton() {
+    return document.querySelector(LIKE_SELECTOR);
+  }
+
+  function readLikedState() {
+    const btn = findLikeButton();
+    if (!btn) return null;
+    return isLikeActive(btn);
+  }
+
   function clickFirst(selectors) {
     for (const sel of selectors) {
       const el = document.querySelector(sel);
@@ -401,7 +417,6 @@
             0,
             Math.min(msg.value, video.duration || msg.value),
           );
-          // Guarda anti-bucle: un seek remoto no debe fabricar sesiones loop.
           if (state.session) {
             state.session.maxTimeReached = video.currentTime;
           }
@@ -428,6 +443,28 @@
           ok = true;
         }
         break;
+      case "like": {
+        const btn = findLikeButton();
+        if (btn) {
+          btn.click();
+          ok = true;
+          setTimeout(() => {
+            const v = getActiveVideo();
+            const i = getTrackInfo();
+            if (v && i) publishNowPlaying(v, i);
+          }, 600);
+        }
+        break;
+      }
+      case "dislike": {
+        if (!CONFIG.REMOTE_DISLIKE) break;
+        const btn = document.querySelector(DISLIKE_SELECTOR);
+        if (btn) {
+          btn.click();
+          ok = true;
+        }
+        break;
+      }
       case "next":
         ok = clickFirst([
           ".ytp-next-button",
@@ -549,9 +586,7 @@
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
 
-      const likeBtn = target.closest(
-        "like-button-view-model button, ytd-toggle-button-renderer#like-button button, #like-button button, ytmusic-like-button-renderer #button-shape-like button, ytmusic-like-button-renderer tp-yt-paper-icon-button.like",
-      );
+      const likeBtn = target.closest(LIKE_SELECTOR);
       if (likeBtn) {
         const wasLiked = isLikeActive(likeBtn);
         setTimeout(() => {
@@ -886,6 +921,7 @@
           isMusic: Boolean(
             state.session ? state.session.isMusic : info.isMusic,
           ),
+          liked: readLikedState(),
           artwork: info.artwork,
           videoUrl: info.videoUrl,
           source: info.source,

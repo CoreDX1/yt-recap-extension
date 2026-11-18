@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube & YT Music Recap",
-  "version": "2.5.0",
+  "version": "3.0",
   "description": "Recaps en tiempo real de YouTube y YouTube Music con calendario, canales, likes, búsquedas y exportación ZIP/PNG.",
   "permissions": ["storage", "unlimitedStorage", "tabs", "scripting"],
   "background": {

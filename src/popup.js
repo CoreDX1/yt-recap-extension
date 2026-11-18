@@ -1,4 +1,4 @@
-// src/popup.js
+// src/popup.js — v2.5.1 (ajuste opcional del PATCH C: debounce mayor + skip si oculto)
 import {
   translateCategory,
   toDateKey,
@@ -38,12 +38,10 @@ import { renderCalendarView } from "./calendarView.js";
 const urlParams = new URLSearchParams(location.search);
 const isFullMode = urlParams.get("full") === "1";
 if (isFullMode) {
-  // Legacy: el Bento fue reemplazado por la app de pestaña completa.
   location.replace(chrome.runtime.getURL("full.html"));
   await new Promise(() => {});
 }
 
-// Fuente única del calendario (compartida con full.html).
 document.getElementById("tab-calendar").innerHTML = CALENDAR_MARKUP;
 
 const $ = (id) => document.getElementById(id);
@@ -202,7 +200,6 @@ function showStatus(msg, isError = false) {
   }, 6000);
 }
 
-// --- TARJETA EN VIVO ---
 function renderNowPlaying(np) {
   if (!np) {
     dom.npEmpty.hidden = false;
@@ -346,7 +343,6 @@ function renderBestNowPlaying() {
   renderOtherOpenTabs(sel.others);
 }
 
-// --- FILTROS ---
 function getFilteredPlays(checkDate = true) {
   return store.history.filter((it) =>
     matchesFilter(
@@ -368,7 +364,6 @@ function getFilteredMeta(items, checkDate = true) {
   );
 }
 
-// --- TABS ---
 function renderSummaryTab() {
   const vm = summaryVM(getFilteredPlays(true));
   if (vm.empty) {
@@ -717,7 +712,6 @@ function invalidateAllTabs() {
   renderActiveTab();
 }
 
-// --- EXPORT / IMPORT / ENRIQUECER ---
 dom.exportBtn.addEventListener("click", async () => {
   const orig = dom.exportBtn.textContent;
   dom.exportBtn.disabled = true;
@@ -790,7 +784,6 @@ dom.enrichMusicBtn.addEventListener("click", async () => {
   }
 });
 
-// --- EVENTOS UI ---
 dom.expandBtn.addEventListener("click", () => {
   window.open(chrome.runtime.getURL("full.html"), "_blank");
 });
@@ -880,6 +873,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   renderBestNowPlaying();
 });
 
+// PATCH C (opcional): debounce 600ms y skip de re-render si el popup está oculto.
 let dataRenderTimer = null;
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
@@ -890,7 +884,9 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (dataChanged) {
     Object.assign(store, updates);
     if (dataRenderTimer) clearTimeout(dataRenderTimer);
-    dataRenderTimer = setTimeout(invalidateAllTabs, 250);
+    dataRenderTimer = setTimeout(() => {
+      if (!document.hidden) invalidateAllTabs();
+    }, 600);
   }
 });
 

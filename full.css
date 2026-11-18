@@ -1,4 +1,9 @@
-/* full.css — shell v2.5 */
+/* full.css — shell v2.5.1
+   PATCH A (Bug 1): cadena de scroll vertical reparada.
+   El flex-item en columna tenía min-height:auto (= alto del contenido),
+   por lo que .content nunca acotaba su altura y su overflow-y:auto no
+   activaba scrollbar; el desborde quedaba clippeado por body{overflow:hidden}.
+   Se agregan min-height:0 y overscroll-behavior:contain. Nada más cambia. */
 
 body.full-shell {
   width: auto;
@@ -60,6 +65,7 @@ body.full-shell[data-scope="youtube"] {
   background: linear-gradient(180deg, #141018 0%, #0f0f0f 40%);
   border-right: 1px solid var(--border);
   overflow-y: auto;
+  overscroll-behavior: contain; /* PATCH A */
 }
 body.full-shell[data-scope="youtube"] .side {
   background: linear-gradient(180deg, #170f10 0%, #0f0f0f 40%);
@@ -238,6 +244,7 @@ body.full-shell[data-scope="youtube"] .brand-logo {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0; /* PATCH A */
   background:
     radial-gradient(
       900px 320px at 12% -8%,
@@ -499,7 +506,9 @@ body.full-shell[data-scope="youtube"] .main-col {
 /* ---------- Contenido / shelves ---------- */
 .content {
   flex: 1;
+  min-height: 0; /* PATCH A: acota el flex-item para que overflow-y:auto funcione */
   overflow-y: auto;
+  overscroll-behavior: contain; /* PATCH A */
   padding: var(--space-5) var(--space-6) var(--space-6);
 }
 .route {
@@ -941,7 +950,6 @@ body.full-shell[data-scope="youtube"] .card-cover.month {
     linear-gradient(160deg, rgba(255, 78, 69, 0.05), transparent 40%),
     var(--surface);
 }
-body.full-shell[data-scope="youtube"] .full-shell .calendar-box,
 body.full-shell[data-scope="youtube"] .calendar-box {
   background:
     linear-gradient(160deg, rgba(255, 0, 0, 0.05), transparent 40%),
@@ -1049,9 +1057,6 @@ body.full-shell[data-scope="youtube"] .calendar-box {
 }
 .pb-ctl.on {
   color: var(--accent-pink);
-}
-.pb-ctl.on::after {
-  content: "";
 }
 .pb-play {
   background: #fff;
