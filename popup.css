@@ -1732,3 +1732,106 @@
     }
   }
 }
+/* --- PULIDO VISUAL EXTRA --- */
+.cal-weekdays abbr {
+  text-decoration: none;
+  cursor: help;
+}
+
+#tab-recent .sub-pills {
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+}
+
+#tab-recent .sub-pill {
+  padding: var(--space-1) 7px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.tabs {
+  background: rgba(19, 19, 22, 0.94);
+  box-shadow:
+    0 -14px 0 0 var(--bg),
+    0 8px 18px rgba(0, 0, 0, 0.55);
+}
+
+body.full-mode {
+  max-width: 880px;
+}
+
+body.full-mode #tab-summary:not([hidden]) {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+body.full-mode #tab-summary .stats-grid {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 0;
+}
+
+@keyframes tabFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tab-panel:not([hidden]) {
+  animation: tabFadeIn var(--duration-fast) var(--ease-out);
+}
+
+/* Modal oscuro nativo */
+dialog.confirm-dialog {
+  margin: auto;
+  width: 315px;
+  background: #18181d;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 22px 48px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  padding: var(--space-6);
+}
+
+dialog.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(4px);
+}
+
+.dialog-title {
+  font-size: var(--fs-lg);
+  color: var(--text);
+  margin-bottom: var(--space-2);
+}
+
+.dialog-desc {
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-bottom: var(--space-5);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.pill-btn.danger {
+  background: rgba(255, 78, 69, 0.18);
+  border-color: rgba(255, 78, 69, 0.45);
+  color: #fca5a5;
+}
+
+.pill-btn.danger:hover {
+  background: rgba(255, 78, 69, 0.32);
+  color: #fff;
+}

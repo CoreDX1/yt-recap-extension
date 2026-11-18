@@ -34,6 +34,9 @@ const dom = {
   exportBtn: $("exportBtn"),
   statusBanner: $("statusBanner"),
   clearBtn: $("clearBtn"),
+  confirmClearDialog: $("confirmClearDialog"),
+  cancelClearBtn: $("cancelClearBtn"),
+  confirmClearBtn: $("confirmClearBtn"),
 
   npEmpty: $("npEmpty"),
   npContent: $("npContent"),
@@ -1418,13 +1421,20 @@ document.querySelectorAll(".ch-dur-pill[data-chmin]").forEach((btn) => {
 dom.periodSelect.addEventListener("change", invalidateAllTabs);
 dom.sourceSelect.addEventListener("change", invalidateAllTabs);
 
-dom.clearBtn.addEventListener("click", async () => {
-  if (
-    !confirm(
-      "¿Seguro que querés borrar todo el historial, búsquedas, likes, skips y canales?",
-    )
-  )
-    return;
+dom.clearBtn.addEventListener("click", () => {
+  dom.confirmClearDialog.showModal();
+});
+
+dom.cancelClearBtn.addEventListener("click", () => {
+  dom.confirmClearDialog.close();
+});
+
+dom.confirmClearDialog.addEventListener("click", (e) => {
+  if (e.target === dom.confirmClearDialog) dom.confirmClearDialog.close();
+});
+
+dom.confirmClearBtn.addEventListener("click", async () => {
+  dom.confirmClearDialog.close();
   const empty = {
     history: [],
     channelVisits: [],

@@ -690,6 +690,22 @@
       </li>
     </template>
 
+    <dialog id="confirmClearDialog" class="confirm-dialog">
+      <h2 class="dialog-title">¿Borrar historial local?</h2>
+      <p class="dialog-desc">
+        Se eliminarán tus reproducciones, búsquedas, likes, skips y visitas a
+        canales guardados en este navegador.
+      </p>
+      <div class="dialog-actions">
+        <button id="cancelClearBtn" type="button" class="pill-btn">
+          Cancelar
+        </button>
+        <button id="confirmClearBtn" type="button" class="pill-btn danger">
+          Sí, borrar todo
+        </button>
+      </div>
+    </dialog>
+
     <script type="module" src="src/popup.js"></script>
   </body>
 </html>
