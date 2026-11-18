@@ -23,32 +23,41 @@
           class="brand"
           title="Cambiar de página"
         >
-          <span class="brand-logo" id="brandLogo" aria-hidden="true">▶</span>
+          <span class="brand-logo" id="brandLogo" aria-hidden="true"></span>
           <span class="brand-word" id="brandWord">Music</span>
-          <span class="brand-swap" aria-hidden="true">⇄</span>
+          <span
+            class="brand-swap"
+            data-icon="swap"
+            data-size="15"
+            aria-hidden="true"
+          ></span>
         </button>
 
         <nav class="side-nav" id="sideNav" aria-label="Secciones">
           <button type="button" class="side-link active" data-route="home">
-            <span aria-hidden="true">⌂</span> Inicio
+            <span class="ico-wrap" data-icon="home" data-size="19"></span>
+            Inicio
           </button>
           <button type="button" class="side-link" data-route="explore">
-            <span aria-hidden="true">◭</span> Explorar
+            <span class="ico-wrap" data-icon="explore" data-size="19"></span>
+            Explorar
           </button>
           <button type="button" class="side-link" data-route="calendar">
-            <span aria-hidden="true">▦</span> Calendario
+            <span class="ico-wrap" data-icon="calendar" data-size="19"></span>
+            Calendario
           </button>
           <button type="button" class="side-link" data-route="people">
-            <span aria-hidden="true">◉</span>
+            <span class="ico-wrap" data-icon="people" data-size="19"></span>
             <span id="peopleLabel">Artistas</span>
           </button>
           <button type="button" class="side-link" data-route="likes">
-            <span aria-hidden="true">❤</span> Likes
+            <span class="ico-wrap" data-icon="heart" data-size="19"></span>
+            Likes
           </button>
         </nav>
 
         <button id="newPlaylistBtn" type="button" class="side-new">
-          <span aria-hidden="true">＋</span> Playlist instantánea
+          <span data-icon="plus" data-size="16"></span> Playlist instantánea
         </button>
 
         <div
@@ -67,9 +76,15 @@
         </div>
       </aside>
 
-      <div class="main-col">
+      <div class="main-col" id="mainCol">
         <header class="topbar">
           <div class="search-wrap">
+            <span
+              class="search-ico"
+              data-icon="search"
+              data-size="17"
+              aria-hidden="true"
+            ></span>
             <input
               id="globalSearch"
               type="search"
@@ -79,12 +94,14 @@
               enterkeyhint="search"
               placeholder="Buscar temas, artistas, canales…"
               aria-label="Buscar en tu recap"
+              aria-expanded="false"
+              aria-controls="searchDrop"
             />
             <div id="searchDrop" class="search-drop" hidden></div>
           </div>
           <div class="top-actions">
-            <button id="importBtn" type="button" class="pill-btn">
-              Importar
+            <button id="importBtn" type="button" class="pill-btn with-ico">
+              <span data-icon="import" data-size="15"></span> Importar
             </button>
             <input
               id="importInput"
@@ -92,32 +109,45 @@
               accept=".json,.zip,application/json,application/zip"
               hidden
             />
-            <button id="exportBtn" type="button" class="pill-btn">
-              Exportar
+            <button id="exportBtn" type="button" class="pill-btn with-ico">
+              <span data-icon="export" data-size="15"></span> Exportar
             </button>
+            <button
+              id="helpBtn"
+              type="button"
+              class="icon-btn"
+              title="Atajos de teclado (?)"
+              aria-label="Atajos de teclado"
+              data-icon="help"
+              data-size="18"
+            ></button>
             <button
               id="miniToggleBtn"
               type="button"
-              class="pill-btn"
+              class="icon-btn"
               title="Mostrar miniplayer"
               aria-label="Mostrar miniplayer"
-            >
-              <span aria-hidden="true">▣</span>
-            </button>
+              data-icon="mini"
+              data-size="18"
+            ></button>
           </div>
         </header>
 
-        <div
-          class="chips-row"
-          id="periodChips"
-          role="group"
-          aria-label="Período"
-        ></div>
+        <div class="chips-row">
+          <div
+            class="chips-group"
+            id="periodChips"
+            role="group"
+            aria-label="Período"
+          ></div>
+          <div class="inline-stats" id="inlineStats" aria-live="polite"></div>
+        </div>
 
         <main class="content" id="content">
           <section id="route-home" class="route"></section>
           <section id="route-explore" class="route" hidden></section>
           <section id="route-calendar" class="route" hidden>
+            <h2 class="route-title" tabindex="-1">Calendario</h2>
             <div id="calHost"></div>
           </section>
           <section id="route-people" class="route" hidden></section>
@@ -148,29 +178,29 @@
           id="pbPrev"
           type="button"
           class="pb-ctl"
-          title="Anterior"
+          title="Anterior (P)"
           aria-label="Anterior"
-        >
-          ⏮
-        </button>
+          data-icon="prev"
+          data-size="19"
+        ></button>
         <button
           id="pbPlay"
           type="button"
           class="pb-ctl pb-play"
-          title="Reproducir / pausar"
+          title="Reproducir / pausar (Espacio)"
           aria-label="Reproducir o pausar"
-        >
-          ▶
-        </button>
+          data-icon="play"
+          data-size="18"
+        ></button>
         <button
           id="pbNext"
           type="button"
           class="pb-ctl"
-          title="Siguiente"
+          title="Siguiente (N)"
           aria-label="Siguiente"
-        >
-          ⏭
-        </button>
+          data-icon="next"
+          data-size="19"
+        ></button>
         <span id="pbTime" class="pb-time">0:00 / 0:00</span>
       </div>
       <div class="pb-center">
@@ -182,20 +212,29 @@
           </div>
         </div>
         <span id="pbSource" class="badge source" hidden>—</span>
-        <span id="pbLoopBadge" class="badge loop" hidden
-          ><span aria-hidden="true">🔁</span> Bucle</span
-        >
+        <span id="pbLoopBadge" class="badge loop" hidden>Bucle</span>
+        <span id="pbPinned" class="badge pin" hidden>Pineada</span>
+        <span id="pbStale" class="badge stale" hidden>Sin señal</span>
       </div>
       <div class="pb-right">
+        <button
+          id="pbLike"
+          type="button"
+          class="pb-ctl"
+          title="Me gusta en la pestaña"
+          aria-label="Me gusta"
+          data-icon="heart"
+          data-size="18"
+        ></button>
         <button
           id="pbMute"
           type="button"
           class="pb-ctl"
-          title="Silenciar"
+          title="Silenciar (M)"
           aria-label="Silenciar"
-        >
-          🔊
-        </button>
+          data-icon="volume"
+          data-size="18"
+        ></button>
         <input
           id="pbVol"
           class="pb-vol"
@@ -211,53 +250,65 @@
           class="pb-ctl"
           title="Bucle"
           aria-label="Bucle"
-        >
-          🔁
-        </button>
+          data-icon="loop"
+          data-size="18"
+        ></button>
         <button
           id="pbShuffle"
           type="button"
           class="pb-ctl"
           title="Aleatorio (YT Music)"
           aria-label="Aleatorio"
-        >
-          🔀
-        </button>
+          data-icon="shuffle"
+          data-size="18"
+        ></button>
         <button
           id="pbQueue"
           type="button"
           class="pb-ctl"
-          title="Otras pestañas"
+          title="Otras pestañas (Q)"
           aria-label="Otras pestañas"
-        >
-          ☰
-        </button>
+          data-icon="queue"
+          data-size="18"
+        ></button>
         <button
           id="pbJump"
           type="button"
           class="pb-ctl"
           title="Ir a la pestaña"
           aria-label="Ir a la pestaña"
-        >
-          ↗
-        </button>
+          data-icon="jump"
+          data-size="18"
+        ></button>
       </div>
     </div>
 
     <div id="miniplayer" class="miniplayer" hidden>
-      <div class="mp-head">
+      <div class="mp-head" id="mpHead">
+        <span
+          class="mp-grip"
+          data-icon="drag"
+          data-size="14"
+          aria-hidden="true"
+        ></span>
         <span class="mp-label">Miniplayer</span>
         <button
           id="mpClose"
           type="button"
-          class="pb-ctl"
+          class="pb-ctl mp-close"
           title="Cerrar"
           aria-label="Cerrar miniplayer"
-        >
-          ✕
-        </button>
+          data-icon="close"
+          data-size="15"
+        ></button>
       </div>
-      <img id="mpThumb" class="mp-thumb" alt="" decoding="async" />
+      <img
+        id="mpThumb"
+        class="mp-thumb"
+        alt=""
+        decoding="async"
+        title="Doble clic para ir a la pestaña"
+      />
       <div id="mpTitle" class="mp-title">—</div>
       <div id="mpArtist" class="mp-artist">—</div>
       <div class="mp-bar"><div id="mpFill" class="mp-fill"></div></div>
@@ -267,23 +318,44 @@
           type="button"
           class="pb-ctl pb-play"
           aria-label="Reproducir o pausar"
-        >
-          ▶
-        </button>
+          data-icon="play"
+          data-size="16"
+        ></button>
         <button
           id="mpJump"
           type="button"
           class="pb-ctl"
           title="Ir a la pestaña"
           aria-label="Ir a la pestaña"
-        >
-          ↗
-        </button>
+          data-icon="jump"
+          data-size="16"
+        ></button>
       </div>
     </div>
 
     <div id="queuePop" class="queue-pop" hidden></div>
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <div id="helpPop" class="help-pop" hidden>
+      <div class="help-title">Atajos de teclado</div>
+      <ul class="help-list">
+        <li><kbd>Espacio</kbd> / <kbd>K</kbd> reproducir / pausar</li>
+        <li><kbd>J</kbd> / <kbd>L</kbd> −5 s / +5 s</li>
+        <li><kbd>M</kbd> silenciar</li>
+        <li><kbd>N</kbd> / <kbd>P</kbd> siguiente / anterior</li>
+        <li><kbd>Q</kbd> otras pestañas</li>
+        <li><kbd>⇄ M</kbd> cambiar Music / YouTube</li>
+        <li><kbd>?</kbd> esta ayuda · <kbd>Esc</kbd> cerrar</li>
+      </ul>
+      <p class="help-note">
+        Los atajos se ignoran mientras escribís en un campo.
+      </p>
+    </div>
+
+    <div id="chartTip" class="chart-tip" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+      <span id="toastIcon" class="toast-ico" aria-hidden="true"></span>
+      <span id="toastMsg"></span>
+    </div>
 
     <dialog id="confirmClearDialog" class="confirm-dialog">
       <h2 class="dialog-title">¿Borrar historial local?</h2>

@@ -6,10 +6,10 @@ import {
   openInstantPlaylist,
   formatClock,
   formatDuration,
-  formatShortDateTime,
   matchesFilter,
   matchesPeriodAndSourceOnly,
   aggregateTracks,
+  getGroupKey,
   isMusicItem,
 } from "./utils.js";
 import {
@@ -40,6 +40,9 @@ import {
   searchVM,
 } from "./viewModels.js";
 import { renderCalendarView } from "./calendarView.js";
+import { icon, mountIcons } from "./icons.js";
+import { relativeTime, formatTimeEs, greeting } from "./relativeTime.js";
+import { createMonogram, attachImgFallback } from "./monogram.js";
 
 const $ = (id) => document.getElementById(id);
 const urlParams = new URLSearchParams(location.search);
@@ -56,16 +59,25 @@ const state = {
   scope:
     localStorage.getItem("recapFullScope") === "youtube" ? "youtube" : "music",
   route: "home",
+  perScopeRoute: {
+    music: localStorage.getItem("recapRouteMusic") || "home",
+    youtube: localStorage.getItem("recapRouteYoutube") || "home",
+  },
   period: localStorage.getItem("recapFullPeriod") || "30",
   q: "",
   pinnedNpTabId: null,
   currentTabId: null,
   currentNp: null,
   seeking: false,
+  hourFilter: null,
+  searchIndex: -1,
+  lastRoute: null,
+  lastScope: null,
 };
 
 const store = emptyStore();
 const npService = new NowPlaying();
+const observers = new Set();
 
 const calUi = {
   calViewMode: "month",
@@ -80,6 +92,7 @@ const calUi = {
 let domCal = null;
 
 const els = {
+  mainCol: $("mainCol"),
   brandBtn: $("brandBtn"),
   brandLogo: $("brandLogo"),
   brandWord: $("brandWord"),
@@ -92,8 +105,11 @@ const els = {
   importBtn: $("importBtn"),
   importInput: $("importInput"),
   exportBtn: $("exportBtn"),
+  helpBtn: $("helpBtn"),
+  helpPop: $("helpPop"),
   miniToggleBtn: $("miniToggleBtn"),
   periodChips: $("periodChips"),
+  inlineStats: $("inlineStats"),
   content: $("content"),
   routes: {
     home: $("route-home"),
@@ -114,6 +130,9 @@ const els = {
   pbArtist: $("pbArtist"),
   pbSource: $("pbSource"),
   pbLoopBadge: $("pbLoopBadge"),
+  pbPinned: $("pbPinned"),
+  pbStale: $("pbStale"),
+  pbLike: $("pbLike"),
   pbMute: $("pbMute"),
   pbVol: $("pbVol"),
   pbLoop: $("pbLoop"),
@@ -121,6 +140,7 @@ const els = {
   pbQueue: $("pbQueue"),
   pbJump: $("pbJump"),
   miniplayer: $("miniplayer"),
+  mpHead: $("mpHead"),
   mpClose: $("mpClose"),
   mpThumb: $("mpThumb"),
   mpTitle: $("mpTitle"),
@@ -129,7 +149,10 @@ const els = {
   mpPlay: $("mpPlay"),
   mpJump: $("mpJump"),
   queuePop: $("queuePop"),
+  chartTip: $("chartTip"),
   toast: $("toast"),
+  toastIcon: $("toastIcon"),
+  toastMsg: $("toastMsg"),
   enrichMusicBtn: $("enrichMusicBtn"),
   clearBtn: $("clearBtn"),
   confirmClearDialog: $("confirmClearDialog"),
@@ -137,18 +160,35 @@ const els = {
   confirmClearBtn: $("confirmClearBtn"),
 };
 
-// ---------- utilidades de vista ----------
-let toastTimer = null;
+// ---------- helpers ----------
+const toastQueue = [];
+let toastBusy = false;
 function toast(msg, isError = false) {
-  els.toast.textContent = msg;
-  els.toast.classList.toggle("error", isError);
+  toastQueue.push({ msg, isError });
+  if (!toastBusy) nextToast();
+}
+function nextToast() {
+  const item = toastQueue.shift();
+  if (!item) {
+    toastBusy = false;
+    return;
+  }
+  toastBusy = true;
+  els.toastMsg.textContent = item.msg;
+  els.toastIcon.innerHTML = icon(item.isError ? "alert" : "check", 15);
+  els.toast.classList.toggle("error", item.isError);
   els.toast.hidden = false;
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (els.toast.hidden = true), 4000);
+  setTimeout(() => {
+    els.toast.hidden = true;
+    setTimeout(nextToast, 160);
+  }, 3200);
 }
 
 function scopeValue() {
   return state.scope === "music" ? "yt_music" : "youtube";
+}
+function scopeName() {
+  return state.scope === "music" ? "Music" : "YouTube sin música";
 }
 function periodPlays() {
   return store.history.filter((it) =>
@@ -182,21 +222,79 @@ function jumpToTab(tabId) {
   chrome.tabs.update(t.id, { active: true });
   chrome.windows.update(t.windowId, { focused: true });
 }
-async function sendControl(action, value) {
-  if (state.currentTabId == null) {
+async function sendControl(action, value, tabId = state.currentTabId) {
+  if (tabId == null) {
     toast("No hay ninguna pestaña de YouTube activa.");
-    return;
+    return false;
   }
   try {
-    const res = await chrome.tabs.sendMessage(state.currentTabId, {
+    const res = await chrome.tabs.sendMessage(tabId, {
       type: "RECAP_CONTROL",
       action,
       value,
     });
-    if (!res?.ok) toast("Esa acción no está disponible en esta pestaña.");
+    if (!res?.ok) {
+      toast("Esa acción no está disponible en esta pestaña.");
+      return false;
+    }
+    return true;
   } catch {
     toast("La pestaña ya no está disponible.", true);
+    return false;
   }
+}
+function dedupeSessions(items) {
+  const map = new Map();
+  for (const it of items) {
+    const key = getGroupKey(it);
+    const cur = map.get(key);
+    if (!cur || it.timestamp > cur.timestamp) map.set(key, it);
+  }
+  return [...map.values()].sort((a, b) => b.timestamp - a.timestamp);
+}
+function formatTag(it) {
+  if (it.contentType === "short") return "Short";
+  if (it.contentType === "live") return "Live";
+  if (it.source === "yt_music") return "YT Music";
+  if (isMusicItem(it)) return "Música";
+  return "";
+}
+function highlight(text, q) {
+  const frag = document.createDocumentFragment();
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if (!q || idx < 0) {
+    frag.append(text);
+    return frag;
+  }
+  frag.append(text.slice(0, idx));
+  const mark = document.createElement("mark");
+  mark.textContent = text.slice(idx, idx + q.length);
+  frag.append(mark);
+  frag.append(text.slice(idx + q.length));
+  return frag;
+}
+
+// ---------- tooltip ----------
+function showTip(text, x, y) {
+  els.chartTip.textContent = text;
+  els.chartTip.hidden = false;
+  const pad = 14;
+  const r = els.chartTip.getBoundingClientRect();
+  let left = x + pad;
+  let top = y + pad;
+  if (left + r.width > innerWidth - 8) left = x - r.width - pad;
+  if (top + r.height > innerHeight - 8) top = y - r.height - pad;
+  els.chartTip.style.left = `${Math.max(8, left)}px`;
+  els.chartTip.style.top = `${Math.max(8, top)}px`;
+}
+function hideTip() {
+  els.chartTip.hidden = true;
+}
+function tipify(el, textFn) {
+  el.addEventListener("mousemove", (e) =>
+    showTip(textFn(), e.clientX, e.clientY),
+  );
+  el.addEventListener("mouseleave", hideTip);
 }
 
 // ---------- router ----------
@@ -210,7 +308,12 @@ function parseHash() {
 function navigate(scope, route) {
   state.scope = scope;
   state.route = route;
+  state.perScopeRoute[scope] = route;
   localStorage.setItem("recapFullScope", scope);
+  localStorage.setItem(
+    scope === "music" ? "recapRouteMusic" : "recapRouteYoutube",
+    route,
+  );
   const hash = `#/${scope}/${route}`;
   if (location.hash !== hash) location.hash = hash;
   else renderAll();
@@ -226,6 +329,10 @@ function renderShell() {
   document.title =
     state.scope === "music" ? "Recap · Music" : "Recap · YouTube";
   els.brandWord.textContent = state.scope === "music" ? "Music" : "YouTube";
+  els.brandLogo.innerHTML = icon(
+    state.scope === "music" ? "music" : "youtube",
+    16,
+  );
   els.brandBtn.title =
     state.scope === "music"
       ? "Cambiar a YouTube sin música"
@@ -234,7 +341,10 @@ function renderShell() {
   els.peopleLabel.textContent =
     state.scope === "music" ? "Artistas" : "Canales";
   els.sideNav.querySelectorAll(".side-link").forEach((b) => {
-    b.classList.toggle("active", b.dataset.route === state.route);
+    const active = b.dataset.route === state.route;
+    b.classList.toggle("active", active);
+    if (active) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
   });
   els.periodChips.replaceChildren(
     ...PERIODS.map(([value, label]) => {
@@ -250,6 +360,25 @@ function renderShell() {
       return b;
     }),
   );
+  const sum = summaryVM(periodPlays());
+  els.inlineStats.replaceChildren();
+  if (!sum.empty) {
+    const strong = (t) => {
+      const s = document.createElement("strong");
+      s.textContent = t;
+      return s;
+    };
+    els.inlineStats.append(
+      strong(String(sum.totalPlays)),
+      " rep · ",
+      strong(formatDuration(sum.totalSeconds)),
+      " · ",
+      strong(String(sum.unique)),
+      " únicos",
+    );
+  } else {
+    els.inlineStats.textContent = "Sin datos en este período";
+  }
   renderSideLists();
 }
 
@@ -257,18 +386,18 @@ function renderSideLists() {
   const vm = homeVM(
     periodPlays(),
     allPlays(),
-    meta(store.interactions),
-    meta(store.searches),
-    meta(store.channelVisits),
+    metaAll(store.interactions),
+    metaAll(store.searches),
+    metaAll(store.channelVisits),
   );
   const nodes = [];
   const liked = meta(store.interactions).filter((it) => it.type === "like");
   const likedBtn = document.createElement("button");
   likedBtn.type = "button";
   likedBtn.className = "side-list";
-  likedBtn.innerHTML = "";
   const lt = document.createElement("strong");
-  lt.textContent = "❤ Liked Music";
+  lt.innerHTML = icon("heartFill", 12);
+  lt.append(state.scope === "music" ? " Liked Music" : " Me gusta (videos)");
   const ls = document.createElement("span");
   ls.textContent = `${liked.length} me gusta · lista generada`;
   likedBtn.append(lt, ls);
@@ -297,8 +426,21 @@ function renderSideLists() {
   els.sideLists.replaceChildren(...nodes);
 }
 
-// ---------- shelves ----------
-function makeCard({ kind, artwork, title, sub, stat, href, onOpen, month }) {
+// ---------- cards / shelves ----------
+function makeCard(opts) {
+  const {
+    kind = "square",
+    artwork,
+    title,
+    sub,
+    stat,
+    href,
+    onOpen,
+    month,
+    badge,
+    tag,
+    name,
+  } = opts;
   const card = document.createElement("button");
   card.type = "button";
   card.className = "card";
@@ -322,18 +464,33 @@ function makeCard({ kind, artwork, title, sub, stat, href, onOpen, month }) {
     img.alt = "";
     img.loading = "lazy";
     img.decoding = "async";
+    attachImgFallback(img, name || title);
     cover.append(img);
+  } else if (kind === "round") {
+    cover.append(createMonogram(name || title));
   } else {
     const na = document.createElement("span");
     na.className = "no-art";
-    na.textContent = kind === "round" ? "◉" : "♪";
+    na.innerHTML = icon(state.scope === "music" ? "music" : "youtube", 34);
     cover.append(na);
+  }
+  if (tag) {
+    const t = document.createElement("span");
+    t.className = "cover-tag";
+    t.textContent = tag;
+    cover.append(t);
+  }
+  if (badge) {
+    const b = document.createElement("span");
+    b.className = "cover-badge";
+    b.textContent = badge;
+    cover.append(b);
   }
   if (href || onOpen) {
     const play = document.createElement("span");
     play.className = "card-play";
     play.setAttribute("aria-hidden", "true");
-    play.textContent = "▶";
+    play.innerHTML = icon("play", 16);
     cover.append(play);
   }
   const t = document.createElement("div");
@@ -349,6 +506,7 @@ function makeCard({ kind, artwork, title, sub, stat, href, onOpen, month }) {
     st.textContent = stat;
     card.append(st);
   }
+  card.title = title;
   card.addEventListener("click", () => {
     if (onOpen) onOpen();
     else openUrl(href);
@@ -356,48 +514,86 @@ function makeCard({ kind, artwork, title, sub, stat, href, onOpen, month }) {
   return card;
 }
 
-function shelf({ eyebrow, title, cards, moreRoute, avatar }) {
+function skeletonRow() {
+  const nodes = [];
+  for (let i = 0; i < 5; i++) {
+    const c = document.createElement("div");
+    c.className = "skel-card";
+    const cover = document.createElement("div");
+    cover.className = "skel-cover";
+    const l1 = document.createElement("div");
+    l1.className = "skel-line";
+    const l2 = document.createElement("div");
+    l2.className = "skel-line short";
+    c.append(cover, l1, l2);
+    nodes.push(c);
+  }
+  return nodes;
+}
+
+function enableDrag(row) {
+  let down = false;
+  let dragged = false;
+  let startX = 0;
+  let startScroll = 0;
+  row.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    down = true;
+    dragged = false;
+    startX = e.clientX;
+    startScroll = row.scrollLeft;
+  });
+  row.addEventListener("pointermove", (e) => {
+    if (!down) return;
+    const dx = e.clientX - startX;
+    if (!dragged && Math.abs(dx) > 6) {
+      dragged = true;
+      row.classList.add("dragging");
+      row.setPointerCapture(e.pointerId);
+    }
+    if (dragged) row.scrollLeft = startScroll - dx;
+  });
+  const end = () => {
+    down = false;
+    row.classList.remove("dragging");
+  };
+  row.addEventListener("pointerup", end);
+  row.addEventListener("pointercancel", end);
+  row.addEventListener(
+    "click",
+    (e) => {
+      if (dragged) {
+        e.stopPropagation();
+        e.preventDefault();
+        dragged = false;
+      }
+    },
+    true,
+  );
+}
+
+function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
   const sec = document.createElement("section");
   sec.className = "shelf";
   const head = document.createElement("div");
   head.className = "shelf-head";
-  if (avatar) {
-    const hero = document.createElement("div");
-    hero.className = "home-hero";
-    const img = document.createElement("img");
-    img.className = "home-avatar";
-    img.src = avatar;
-    img.alt = "";
-    const txt = document.createElement("div");
-    txt.className = "home-hero-text";
+  if (eyebrow) {
     const eb = document.createElement("span");
     eb.className = "shelf-eyebrow";
-    eb.textContent = eyebrow || "";
-    const ti = document.createElement("span");
-    ti.className = "shelf-title";
-    ti.textContent = title;
-    txt.append(eb, ti);
-    hero.append(img, txt);
-    head.append(hero);
-  } else {
-    if (eyebrow) {
-      const eb = document.createElement("span");
-      eb.className = "shelf-eyebrow";
-      eb.textContent = eyebrow;
-      head.append(eb);
-    }
-    const ti = document.createElement("h2");
-    ti.className = "shelf-title";
-    ti.textContent = title;
-    head.append(ti);
+    eb.textContent = eyebrow;
+    head.append(eb);
   }
+  const ti = document.createElement("h2");
+  ti.className = "shelf-title";
+  ti.textContent = title;
+  head.append(ti);
   const tools = document.createElement("div");
   tools.className = "shelf-tools";
   if (moreRoute) {
     const more = document.createElement("button");
     more.type = "button";
     more.className = "shelf-more";
-    more.textContent = "More";
+    more.textContent = "Ver todo";
     more.addEventListener("click", () => navigate(state.scope, moreRoute));
     tools.append(more);
   }
@@ -405,29 +601,66 @@ function shelf({ eyebrow, title, cards, moreRoute, avatar }) {
   prev.type = "button";
   prev.className = "shelf-arrow";
   prev.setAttribute("aria-label", "Desplazar a la izquierda");
-  prev.textContent = "‹";
+  prev.innerHTML = icon("chevronLeft", 16);
   const next = document.createElement("button");
   next.type = "button";
   next.className = "shelf-arrow";
   next.setAttribute("aria-label", "Desplazar a la derecha");
-  next.textContent = "›";
+  next.innerHTML = icon("chevronRight", 16);
   tools.append(prev, next);
   head.append(tools);
 
   const row = document.createElement("div");
   row.className = "shelf-row";
-  row.append(...cards);
+  row.tabIndex = 0;
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", title);
+  row.append(...skeletonRow());
   const updateArrows = () => {
     prev.disabled = row.scrollLeft <= 4;
     next.disabled = row.scrollLeft + row.clientWidth >= row.scrollWidth - 4;
   };
-  prev.addEventListener("click", () => {
-    row.scrollBy({ left: -row.clientWidth * 0.8, behavior: "smooth" });
-  });
-  next.addEventListener("click", () => {
-    row.scrollBy({ left: row.clientWidth * 0.8, behavior: "smooth" });
-  });
+  prev.addEventListener("click", () =>
+    row.scrollBy({ left: -row.clientWidth * 0.8, behavior: "smooth" }),
+  );
+  next.addEventListener("click", () =>
+    row.scrollBy({ left: row.clientWidth * 0.8, behavior: "smooth" }),
+  );
   row.addEventListener("scroll", updateArrows, { passive: true });
+  row.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      next.click();
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      prev.click();
+    }
+  });
+  enableDrag(row);
+
+  const mount = () => {
+    row.replaceChildren(...cardsFactory());
+    requestAnimationFrame(updateArrows);
+  };
+  if ("IntersectionObserver" in window) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const en of entries) {
+          if (en.isIntersecting) {
+            mount();
+            io.disconnect();
+            observers.delete(io);
+          }
+        }
+      },
+      { root: els.content, rootMargin: "400px 0px" },
+    );
+    observers.add(io);
+    io.observe(sec);
+  } else {
+    mount();
+  }
   requestAnimationFrame(updateArrows);
   sec.append(head, row);
   return sec;
@@ -440,17 +673,60 @@ function trackCards(tracks, wide = false) {
       artwork: t.artwork,
       title: t.title,
       sub: t.artist,
+      name: t.artist,
       stat: `${t.plays}x · ${t.seconds > 0 ? formatDuration(t.seconds) : "importado"}`,
+      badge: t.seconds > 0 ? formatClock(t.seconds) : "",
+      tag: formatTag(t),
       href: t.videoUrl || resolveVideoUrl(t),
     }),
   );
 }
-
+function sessionCards(items, wide = false) {
+  return items.map((p) =>
+    makeCard({
+      kind: wide ? "wide" : "square",
+      artwork: p.artwork,
+      title: p.title,
+      sub: p.artist,
+      name: p.artist,
+      stat: relativeTime(p.timestamp),
+      badge: p.seconds > 0 ? formatClock(p.seconds) : "",
+      tag: formatTag(p),
+      href: resolveVideoUrl(p),
+    }),
+  );
+}
+function peopleCards(list) {
+  return list.map((a) =>
+    makeCard({
+      kind: "round",
+      artwork: a.artwork,
+      title: a.name,
+      sub: `${a.plays} reproducciones`,
+      stat: a.seconds > 0 ? formatDuration(a.seconds) : "visitas",
+      href: a.url || undefined,
+      onOpen: a.url
+        ? undefined
+        : () => {
+            state.q = a.name;
+            els.globalSearch.value = a.name;
+            navigate(state.scope, "results");
+          },
+    }),
+  );
+}
 function emptyBox(msg) {
   const p = document.createElement("p");
   p.className = "empty-msg";
   p.textContent = msg;
   return p;
+}
+function routeTitle(text) {
+  const h = document.createElement("h2");
+  h.className = "route-title";
+  h.tabIndex = -1;
+  h.textContent = text;
+  return h;
 }
 
 // ---------- rutas ----------
@@ -463,9 +739,39 @@ function renderHome() {
     metaAll(store.searches),
     metaAll(store.channelVisits),
   );
+  const sum = summaryVM(plays);
   const host = els.routes.home;
   host.replaceChildren();
-  if (plays.length === 0 && vm.recent.length === 0) {
+
+  const hero = document.createElement("div");
+  hero.className = "hero";
+  const g = document.createElement("h2");
+  g.className = "route-title hero-greet";
+  g.tabIndex = -1;
+  g.textContent = greeting();
+  const sub = document.createElement("div");
+  sub.className = "hero-sub";
+  sub.textContent = `Tu recap de ${scopeName()} · ${periodLabel()}`;
+  const kpis = document.createElement("div");
+  kpis.className = "hero-kpis";
+  const kpi = (label, value) => {
+    const k = document.createElement("span");
+    k.className = "hero-kpi";
+    const s = document.createElement("strong");
+    s.textContent = value;
+    k.append(s, ` ${label}`);
+    return k;
+  };
+  kpis.append(
+    kpi("escuchados", sum.empty ? "0 min" : formatDuration(sum.totalSeconds)),
+    kpi("reproducciones", String(sum.empty ? 0 : sum.totalPlays)),
+    kpi("únicos", String(sum.empty ? 0 : sum.unique)),
+    kpi("días de racha", String(sum.empty ? 0 : sum.streak)),
+  );
+  hero.append(g, sub, kpis);
+  host.append(hero);
+
+  if (plays.length === 0) {
     host.append(
       emptyBox(
         "Todavía no hay datos en este período. Reproducí al menos 20 segundos en YouTube o YT Music y volvé.",
@@ -473,15 +779,14 @@ function renderHome() {
     );
     return;
   }
-  const topArtistArt = vm.artists[0]?.artwork || "";
+
   if (state.scope === "music") {
     if (vm.top.length)
       host.append(
         shelf({
           eyebrow: "Tu recap",
           title: "Listen again",
-          avatar: topArtistArt,
-          cards: trackCards(vm.top),
+          cardsFactory: () => trackCards(vm.top),
           moreRoute: "explore",
         }),
       );
@@ -489,30 +794,14 @@ function renderHome() {
       host.append(
         shelf({
           title: "Forgotten favorites",
-          cards: trackCards(vm.forgotten),
+          cardsFactory: () => trackCards(vm.forgotten),
         }),
       );
     if (vm.artists.length)
       host.append(
         shelf({
           title: "Tus artistas",
-          cards: vm.artists.map((a) =>
-            makeCard({
-              kind: "round",
-              artwork: a.artwork,
-              title: a.name,
-              sub: `${a.plays} reproducciones`,
-              stat: formatDuration(a.seconds),
-              href: a.url || undefined,
-              onOpen: a.url
-                ? undefined
-                : () => {
-                    state.q = a.name;
-                    els.globalSearch.value = a.name;
-                    navigate(state.scope, "results");
-                  },
-            }),
-          ),
+          cardsFactory: () => peopleCards(vm.artists),
           moreRoute: "people",
         }),
       );
@@ -520,53 +809,42 @@ function renderHome() {
       host.append(
         shelf({
           title: "Álbumes",
-          cards: vm.albums.map((a) =>
-            makeCard({
-              artwork: a.artwork,
-              title: a.album,
-              sub: a.artist,
-              stat: `${a.plays}x · ${formatDuration(a.seconds)}`,
-            }),
-          ),
+          cardsFactory: () =>
+            vm.albums.map((a) =>
+              makeCard({
+                artwork: a.artwork,
+                title: a.album,
+                sub: a.artist,
+                name: a.artist,
+                stat: `${a.plays}x · ${formatDuration(a.seconds)}`,
+                badge: a.seconds > 0 ? formatClock(a.seconds) : "",
+              }),
+            ),
         }),
       );
   } else {
-    if (vm.recent.length)
+    const recent = dedupeSessions(vm.recent).slice(0, 12);
+    if (recent.length)
       host.append(
         shelf({
           eyebrow: "Tu recap",
           title: "Seguir viendo",
-          cards: vm.recent.map((p) =>
-            makeCard({
-              kind: "wide",
-              artwork: p.artwork,
-              title: p.title,
-              sub: p.artist,
-              stat: formatShortDateTime(p.timestamp),
-              href: resolveVideoUrl(p),
-            }),
-          ),
+          cardsFactory: () => sessionCards(recent, true),
           moreRoute: "explore",
         }),
       );
     if (vm.top.length)
       host.append(
-        shelf({ title: "Top del período", cards: trackCards(vm.top, true) }),
+        shelf({
+          title: "Top del período",
+          cardsFactory: () => trackCards(vm.top, true),
+        }),
       );
     if (vm.channels.length)
       host.append(
         shelf({
           title: "Tus canales",
-          cards: vm.channels.map((c) =>
-            makeCard({
-              kind: "round",
-              artwork: c.artwork,
-              title: c.name,
-              sub: `${c.plays} rep.`,
-              stat: c.seconds > 0 ? formatDuration(c.seconds) : "visitas",
-              href: c.url || undefined,
-            }),
-          ),
+          cardsFactory: () => peopleCards(vm.channels),
           moreRoute: "people",
         }),
       );
@@ -574,34 +852,20 @@ function renderHome() {
       host.append(
         shelf({
           title: "Shorts",
-          cards: vm.shorts.map((p) =>
-            makeCard({
-              artwork: p.artwork,
-              title: p.title,
-              sub: p.artist,
-              stat: formatClock(p.seconds || 0),
-              href: resolveVideoUrl(p),
-            }),
-          ),
+          cardsFactory: () =>
+            sessionCards(dedupeSessions(vm.shorts).slice(0, 12)),
         }),
       );
     if (vm.lives.length)
       host.append(
         shelf({
           title: "Directos",
-          cards: vm.lives.map((p) =>
-            makeCard({
-              kind: "wide",
-              artwork: p.artwork,
-              title: p.title,
-              sub: p.artist,
-              stat: formatDuration(p.seconds || 0),
-              href: resolveVideoUrl(p),
-            }),
-          ),
+          cardsFactory: () =>
+            sessionCards(dedupeSessions(vm.lives).slice(0, 12), true),
         }),
       );
   }
+
   const monthCards = vm.months
     .filter((m) => m.plays > 0)
     .map((m) =>
@@ -623,7 +887,7 @@ function renderHome() {
     host.append(
       shelf({
         title: "Recaps por mes",
-        cards: monthCards,
+        cardsFactory: () => monthCards,
         moreRoute: "calendar",
       }),
     );
@@ -631,14 +895,15 @@ function renderHome() {
     host.append(
       shelf({
         title: "Búsquedas recientes",
-        cards: vm.recentSearches.map((s) =>
-          makeCard({
-            title: s.query,
-            sub: s.source === "yt_music" ? "YT Music" : "YouTube",
-            stat: formatShortDateTime(s.timestamp),
-            href: s.url,
-          }),
-        ),
+        cardsFactory: () =>
+          vm.recentSearches.map((s) =>
+            makeCard({
+              title: s.query,
+              sub: s.source === "yt_music" ? "YT Music" : "YouTube",
+              stat: relativeTime(s.timestamp),
+              href: s.url,
+            }),
+          ),
       }),
     );
 }
@@ -668,6 +933,7 @@ function renderExplore() {
   const sum = summaryVM(plays);
   const host = els.routes.explore;
   host.replaceChildren();
+  host.append(routeTitle("Explorar"));
 
   const grid = document.createElement("div");
   grid.className = "explore-grid";
@@ -687,17 +953,26 @@ function renderExplore() {
   const hoursBox = document.createElement("div");
   hoursBox.className = "explore-box wide";
   const hTitle = document.createElement("h3");
-  hTitle.textContent = "Actividad por hora del día";
+  hTitle.textContent =
+    "Actividad por hora del día · clic en una barra para ver ese horario";
   const chart = document.createElement("div");
   chart.className = "hours-chart";
   chart.append(
     ...vm.hours.map((sec, h) => {
       const bar = document.createElement("div");
       bar.className = sec === 0 ? "hour-bar zero" : "hour-bar";
+      if (state.hourFilter === h) bar.classList.add("selected");
       const pct =
         vm.maxHour > 0 ? Math.max(5, Math.round((sec / vm.maxHour) * 100)) : 5;
       bar.style.height = sec === 0 ? "4px" : `${pct}%`;
-      bar.title = `${String(h).padStart(2, "0")}:00 — ${formatDuration(sec)}`;
+      tipify(
+        bar,
+        () => `${String(h).padStart(2, "0")}:00 — ${formatDuration(sec)}`,
+      );
+      bar.addEventListener("click", () => {
+        state.hourFilter = state.hourFilter === h ? null : h;
+        renderExplore();
+      });
       return bar;
     }),
   );
@@ -710,6 +985,86 @@ function renderExplore() {
   }
   hoursBox.append(hTitle, chart, labels);
   host.append(hoursBox);
+
+  if (state.hourFilter != null) {
+    const hourPlays = plays
+      .filter((p) => new Date(p.timestamp).getHours() === state.hourFilter)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    const box = document.createElement("div");
+    box.className = "explore-box wide";
+    const t = document.createElement("h3");
+    t.textContent = `Reproducciones de las ${String(state.hourFilter).padStart(2, "0")}:00 (${hourPlays.length})`;
+    box.append(t);
+    if (hourPlays.length === 0)
+      box.append(emptyBox("Nada en ese horario dentro del período."));
+    else {
+      const ul = document.createElement("ul");
+      ul.className = "top-list";
+      ul.append(
+        ...hourPlays
+          .slice(0, 20)
+          .map((p, i) =>
+            buildTrackRow(
+              String(i + 1),
+              p.artwork,
+              p.title,
+              `${p.artist} · ${formatTimeEs(p.timestamp)}`,
+              formatClock(p.seconds || 0),
+              { href: resolveVideoUrl(p) },
+            ),
+          ),
+      );
+      box.append(ul);
+    }
+    host.append(box);
+  }
+
+  const wdSec = new Array(7).fill(0);
+  const wdPlays = new Array(7).fill(0);
+  for (const p of plays) {
+    const idx = (new Date(p.timestamp).getDay() + 6) % 7;
+    wdSec[idx] += p.seconds || 0;
+    wdPlays[idx] += 1;
+  }
+  const wdBox = document.createElement("div");
+  wdBox.className = "explore-box wide";
+  const wdTitle = document.createElement("h3");
+  wdTitle.textContent = "Rendimiento por día de la semana";
+  const wdChart = document.createElement("div");
+  wdChart.className = "weekday-chart";
+  const wdLabels = ["L", "M", "X", "J", "V", "S", "D"];
+  const wdFull = [
+    "Lunes",
+    "Martes",
+    "Miércoles",
+    "Jueves",
+    "Viernes",
+    "Sábado",
+    "Domingo",
+  ];
+  const maxWd = Math.max(...wdSec, 1);
+  wdChart.append(
+    ...wdSec.map((sec, i) => {
+      const col = document.createElement("div");
+      col.className = "wd-col";
+      const bar = document.createElement("div");
+      bar.className =
+        sec === 0 ? "wd-bar zero" : sec === maxWd ? "wd-bar peak" : "wd-bar";
+      bar.style.height =
+        sec === 0 ? "4px" : `${Math.max(8, Math.round((sec / maxWd) * 100))}%`;
+      tipify(
+        bar,
+        () => `${wdFull[i]}: ${formatDuration(sec)} (${wdPlays[i]} rep.)`,
+      );
+      const lbl = document.createElement("span");
+      lbl.className = "wd-lbl";
+      lbl.textContent = wdLabels[i];
+      col.append(bar, lbl);
+      return col;
+    }),
+  );
+  wdBox.append(wdTitle, wdChart);
+  host.append(wdBox);
 
   const chipsBox = document.createElement("div");
   chipsBox.className = "explore-box wide";
@@ -756,6 +1111,11 @@ function renderExplore() {
         fill.className = "cat-fill";
         fill.style.width = `${st.pct}%`;
         track.append(fill);
+        tipify(
+          track,
+          () =>
+            `${translateCategory(st.cat)} · ${st.pct}% · ${formatDuration(st.seconds)}`,
+        );
         row.append(top, track);
         return row;
       }),
@@ -807,6 +1167,9 @@ function renderCalendarRoute() {
 function renderPeople() {
   const host = els.routes.people;
   host.replaceChildren();
+  host.append(
+    routeTitle(state.scope === "music" ? "Tus artistas" : "Tus canales"),
+  );
   if (state.scope === "music") {
     const vm = activityVM(
       periodPlays(),
@@ -817,7 +1180,7 @@ function renderPeople() {
     const box = document.createElement("div");
     box.className = "explore-box wide";
     const t = document.createElement("h3");
-    t.textContent = "Tus artistas por tiempo escuchado";
+    t.textContent = "Artistas por tiempo escuchado";
     const ul = document.createElement("ul");
     ul.className = "top-list";
     ul.append(
@@ -835,23 +1198,13 @@ function renderPeople() {
     box.append(t, ul);
     host.append(box);
     const all = homeVM(periodPlays(), allPlays(), [], [], []).artists;
-    if (all.length) {
+    if (all.length)
       host.append(
         shelf({
           title: "Explorar artistas",
-          cards: all.map((a) =>
-            makeCard({
-              kind: "round",
-              artwork: a.artwork,
-              title: a.name,
-              sub: `${a.plays} rep.`,
-              stat: formatDuration(a.seconds),
-              href: a.url || undefined,
-            }),
-          ),
+          cardsFactory: () => peopleCards(all),
         }),
       );
-    }
     return;
   }
   const vm = channelsVM(meta(store.channelVisits), periodPlays(), "time", 0);
@@ -896,7 +1249,7 @@ function renderPeople() {
           "👁",
           v.avatar,
           v.name,
-          formatShortDateTime(v.timestamp),
+          relativeTime(v.timestamp),
           "Abrir ↗",
           { href: v.url || undefined, avatar: true },
         ),
@@ -911,6 +1264,7 @@ function renderLikes() {
   const vm = likesVM(meta(store.interactions), meta(store.searches));
   const host = els.routes.likes;
   host.replaceChildren();
+  host.append(routeTitle("Likes y actividad"));
   const stats = document.createElement("div");
   stats.className = "explore-grid";
   stats.append(
@@ -919,8 +1273,6 @@ function renderLikes() {
     statCard("Búsquedas", `🔍 ${vm.searches.length}`),
   );
   host.append(stats);
-  const cols = document.createElement("div");
-  cols.className = "likes-cols";
   const mk = (title, items, renderer, empty) => {
     const box = document.createElement("div");
     box.className = "explore-box";
@@ -936,6 +1288,8 @@ function renderLikes() {
     }
     return box;
   };
+  const cols = document.createElement("div");
+  cols.className = "likes-cols";
   cols.append(
     mk(
       "Me gusta",
@@ -966,7 +1320,10 @@ function renderResults() {
   host.replaceChildren();
   const vm = searchVM(state.q, scopeValue(), store);
   if (!vm) {
-    host.append(emptyBox("Escribí algo en el buscador para ver resultados."));
+    host.append(
+      routeTitle("Resultados"),
+      emptyBox("Escribí algo en el buscador para ver resultados."),
+    );
     return;
   }
   const total =
@@ -974,75 +1331,67 @@ function renderResults() {
     vm.artists.length +
     vm.channels.length +
     vm.searches.length;
+  const head = routeTitle(`Resultados para «${state.q}»`);
+  host.append(head);
   if (total === 0) {
-    host.append(emptyBox(`Sin resultados para «${state.q}» en esta página.`));
+    host.append(
+      emptyBox(`Sin resultados para «${state.q}» en ${scopeName()}.`),
+    );
     return;
   }
-  const head = document.createElement("div");
-  head.className = "shelf-head";
-  const t = document.createElement("h2");
-  t.className = "shelf-title";
-  t.textContent = `Resultados para «${state.q}»`;
-  head.append(t);
-  host.append(head);
   if (vm.tracks.length)
     host.append(
       shelf({
         title: "Temas y videos",
-        cards: trackCards(vm.tracks, state.scope !== "music"),
+        cardsFactory: () => trackCards(vm.tracks, state.scope !== "music"),
       }),
     );
   if (vm.artists.length)
     host.append(
       shelf({
         title: "Artistas / canales",
-        cards: vm.artists.map((a) =>
-          makeCard({
-            kind: "round",
-            artwork: a.artwork,
-            title: a.name,
-            sub: `${a.plays} rep.`,
-            stat: formatDuration(a.seconds),
-            href: a.url || undefined,
-          }),
-        ),
+        cardsFactory: () => peopleCards(vm.artists),
       }),
     );
   if (vm.channels.length)
     host.append(
       shelf({
         title: "Canales visitados",
-        cards: vm.channels.map((v) =>
-          makeCard({
-            kind: "round",
-            artwork: v.avatar,
-            title: v.name,
-            sub: formatShortDateTime(v.timestamp),
-            href: v.url,
-          }),
-        ),
+        cardsFactory: () =>
+          vm.channels.map((v) =>
+            makeCard({
+              kind: "round",
+              artwork: v.avatar,
+              title: v.name,
+              sub: relativeTime(v.timestamp),
+              href: v.url,
+            }),
+          ),
       }),
     );
   if (vm.searches.length)
     host.append(
       shelf({
         title: "Búsquedas",
-        cards: vm.searches.map((s) =>
-          makeCard({
-            title: s.query,
-            sub: s.source === "yt_music" ? "YT Music" : "YouTube",
-            stat: formatShortDateTime(s.timestamp),
-            href: s.url,
-          }),
-        ),
+        cardsFactory: () =>
+          vm.searches.map((s) =>
+            makeCard({
+              title: s.query,
+              sub: s.source === "yt_music" ? "YT Music" : "YouTube",
+              stat: relativeTime(s.timestamp),
+              href: s.url,
+            }),
+          ),
       }),
     );
 }
 
 function renderRoute() {
-  for (const [key, node] of Object.entries(els.routes)) {
+  for (const io of observers) io.disconnect();
+  observers.clear();
+  hideTip();
+  for (const [key, node] of Object.entries(els.routes))
     node.hidden = key !== state.route;
-  }
   switch (state.route) {
     case "home":
       renderHome();
@@ -1063,9 +1412,21 @@ function renderRoute() {
       renderResults();
       break;
   }
+  if (state.lastRoute !== state.route || state.lastScope !== state.scope) {
+    els.content.scrollTop = 0;
+    const heading = els.routes[state.route].querySelector(".route-title");
+    if (heading) heading.focus({ preventScroll: true });
+    state.lastRoute = state.route;
+    state.lastScope = state.scope;
+  }
 }
 
 function renderAll() {
+  if (state.lastScope != null && state.lastScope !== state.scope) {
+    els.mainCol.classList.remove("scope-enter");
+    void els.mainCol.offsetWidth;
+    els.mainCol.classList.add("scope-enter");
+  }
   renderShell();
   renderRoute();
   renderPlayer();
@@ -1083,13 +1444,18 @@ function renderPlayer() {
     els.pbThumb.removeAttribute("src");
     els.pbSource.hidden = true;
     els.pbLoopBadge.hidden = true;
+    els.pbPinned.hidden = true;
+    els.pbStale.hidden = true;
     els.pbTime.textContent = "0:00 / 0:00";
     els.pbSeek.value = 0;
-    els.pbPlay.textContent = "▶";
+    els.pbSeek.style.setProperty("--pb-fill", "0%");
+    els.pbPlay.innerHTML = icon("play", 18);
+    els.pbLike.innerHTML = icon("heart", 18);
+    els.pbLike.classList.remove("on");
     els.mpTitle.textContent = "—";
     els.mpArtist.textContent = "—";
     els.mpFill.style.width = "0%";
-    els.mpPlay.textContent = "▶";
+    els.mpPlay.innerHTML = icon("play", 16);
     renderQueue([]);
     return;
   }
@@ -1114,14 +1480,34 @@ function renderPlayer() {
         ? "YouTube · Música"
         : "YouTube";
   els.pbLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
-  els.pbPlay.textContent = np.paused ? "▶" : "⏸";
-  els.mpPlay.textContent = np.paused ? "▶" : "⏸";
-  els.pbMute.textContent = np.muted ? "🔇" : "🔊";
+  els.pbPinned.hidden = state.pinnedNpTabId == null;
+  els.pbStale.hidden = !(!np.paused && Date.now() - np.updatedAt > 90000);
+  els.pbPlay.innerHTML = icon(np.paused ? "play" : "pause", 18);
+  els.mpPlay.innerHTML = icon(np.paused ? "play" : "pause", 16);
+  els.pbMute.innerHTML = icon(np.muted ? "mute" : "volume", 18);
   els.pbLoop.classList.toggle("on", Boolean(np.loopActive || np.isLoopSession));
+  els.pbLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
+  els.pbLike.classList.toggle("on", np.liked === true);
+  els.pbLike.title =
+    np.liked == null
+      ? "Estado de like no disponible en esta pestaña"
+      : np.liked
+        ? "Quitar Me gusta"
+        : "Dar Me gusta";
   if (!state.seeking) {
-    els.pbVol.value = Math.round((np.muted ? 0 : (np.volume ?? 1)) * 100);
+    const vol = Math.round((np.muted ? 0 : (np.volume ?? 1)) * 100);
+    els.pbVol.value = vol;
+    els.pbVol.style.setProperty("--pb-vol", `${vol}%`);
+    els.pbVol.setAttribute("aria-valuetext", `${vol}%`);
     const pct = np.duration > 0 ? np.currentTime / np.duration : 0;
     els.pbSeek.value = Math.round(pct * 1000);
+    els.pbSeek.style.setProperty("--pb-fill", `${(pct * 100).toFixed(2)}%`);
+    els.pbSeek.setAttribute(
+      "aria-valuetext",
+      np.duration > 0
+        ? `${formatClock(np.currentTime)} de ${formatClock(np.duration)}`
+        : formatClock(np.currentTime),
+    );
     els.mpFill.style.width = `${(pct * 100).toFixed(1)}%`;
   }
   els.pbTime.textContent =
@@ -1145,12 +1531,14 @@ function renderQueue(others) {
     nodes.push(p);
   }
   for (const tab of others) {
+    const wrap = document.createElement("div");
+    wrap.className = "queue-item";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "np-other-btn";
     const st = document.createElement("span");
     st.className = tab.paused ? "np-other-state" : "np-other-state playing";
-    st.textContent = tab.paused ? "⏸" : "▶";
+    st.innerHTML = icon(tab.paused ? "pause" : "play", 12);
     const img = document.createElement("img");
     img.className = "np-other-thumb";
     if (tab.artwork) img.src = tab.artwork;
@@ -1172,23 +1560,239 @@ function renderQueue(others) {
       state.pinnedNpTabId = tab.storageKey || tab.tabId;
       renderPlayer();
     });
-    nodes.push(btn);
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "queue-mini";
+    playBtn.title = tab.paused
+      ? "Reproducir en esa pestaña"
+      : "Pausar esa pestaña";
+    playBtn.innerHTML = icon(tab.paused ? "play" : "pause", 13);
+    playBtn.addEventListener("click", () =>
+      sendControl(tab.paused ? "play" : "pause", undefined, tab.tabId),
+    );
+    const pinBtn = document.createElement("button");
+    pinBtn.type = "button";
+    pinBtn.className =
+      "queue-mini" +
+      (state.pinnedNpTabId === (tab.storageKey || tab.tabId) ? " on" : "");
+    pinBtn.title = "Pinear como principal";
+    pinBtn.innerHTML = icon("pin", 13);
+    pinBtn.addEventListener("click", () => {
+      const key = tab.storageKey || tab.tabId;
+      state.pinnedNpTabId = state.pinnedNpTabId === key ? null : key;
+      renderPlayer();
+    });
+    const jumpBtn = document.createElement("button");
+    jumpBtn.type = "button";
+    jumpBtn.className = "queue-mini";
+    jumpBtn.title = "Ir a esa pestaña";
+    jumpBtn.innerHTML = icon("jump", 13);
+    jumpBtn.addEventListener("click", () => jumpToTab(tab.tabId));
+    wrap.append(btn, playBtn, pinBtn, jumpBtn);
+    nodes.push(wrap);
   }
   els.queuePop.replaceChildren(...nodes);
+}
+
+// ---------- búsqueda ----------
+function searchHitNodes() {
+  return [...els.searchDrop.querySelectorAll(".search-hit, .search-chip")];
+}
+function setSearchIndex(idx) {
+  const nodes = searchHitNodes();
+  state.searchIndex = idx;
+  nodes.forEach((n, i) => n.classList.toggle("is-active", i === idx));
+  if (nodes[idx]) nodes[idx].scrollIntoView({ block: "nearest" });
+}
+function renderSearchDrop(q) {
+  const nodes = [];
+  const scopeLine = document.createElement("div");
+  scopeLine.className = "search-scope";
+  scopeLine.textContent = `Buscando en ${scopeName()}`;
+  nodes.push(scopeLine);
+
+  if (!q) {
+    const recent = [];
+    const seen = new Set();
+    for (const s of [...store.searches].sort(
+      (a, b) => b.timestamp - a.timestamp,
+    )) {
+      const inScope =
+        scopeValue() === "yt_music"
+          ? s.source === "yt_music"
+          : s.source === "youtube";
+      if (!inScope || seen.has(s.normalized)) continue;
+      seen.add(s.normalized);
+      recent.push(s);
+      if (recent.length >= 8) break;
+    }
+    const t = document.createElement("div");
+    t.className = "search-group-title";
+    t.textContent = "Búsquedas recientes";
+    nodes.push(t);
+    if (recent.length === 0) {
+      const p = document.createElement("p");
+      p.className = "empty-msg small";
+      p.textContent = "Sin búsquedas recientes en esta página.";
+      nodes.push(p);
+    } else {
+      const chips = document.createElement("div");
+      chips.className = "search-chips";
+      chips.append(
+        ...recent.map((s) => {
+          const c = document.createElement("button");
+          c.type = "button";
+          c.className = "search-chip";
+          c.textContent = s.query;
+          c.addEventListener("click", () => {
+            els.globalSearch.value = s.query;
+            state.q = s.query;
+            els.searchDrop.hidden = true;
+            els.globalSearch.setAttribute("aria-expanded", "false");
+            navigate(state.scope, "results");
+          });
+          return c;
+        }),
+      );
+      nodes.push(chips);
+    }
+  } else {
+    const vm = searchVM(q, scopeValue(), store);
+    const group = (title, items, make) => {
+      if (!items.length) return;
+      const t = document.createElement("div");
+      t.className = "search-group-title";
+      t.textContent = title;
+      nodes.push(t);
+      nodes.push(...items.map(make));
+    };
+    const hit = (artwork, name, title, sub, onOpen) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "search-hit";
+      if (artwork) {
+        const img = document.createElement("img");
+        img.src = artwork;
+        img.alt = "";
+        attachImgFallback(img, name);
+        b.append(img);
+      } else {
+        const mono = createMonogram(name);
+        mono.style.width = "30px";
+        mono.style.height = "30px";
+        mono.style.borderRadius = "5px";
+        mono.style.fontSize = "12px";
+        b.append(mono);
+      }
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const t = document.createElement("div");
+      t.className = "t";
+      t.append(highlight(title, q));
+      const s = document.createElement("div");
+      s.className = "s";
+      s.textContent = sub;
+      meta.append(t, s);
+      b.append(meta);
+      b.addEventListener("click", () => {
+        els.searchDrop.hidden = true;
+        els.globalSearch.setAttribute("aria-expanded", "false");
+        onOpen();
+      });
+      return b;
+    };
+    group("Temas", vm.tracks.slice(0, 4), (t) =>
+      hit(t.artwork, t.artist, t.title, t.artist, () => openUrl(t.videoUrl)),
+    );
+    group("Artistas", vm.artists.slice(0, 3), (a) =>
+      hit(a.artwork, a.name, a.name, `${a.plays} rep.`, () => openUrl(a.url)),
+    );
+    group("Canales", vm.channels.slice(0, 3), (v) =>
+      hit(v.avatar, v.name, v.name, "Canal visitado", () => openUrl(v.url)),
+    );
+    group("Búsquedas", vm.searches.slice(0, 3), (s) =>
+      hit(
+        "",
+        s.query,
+        s.query,
+        s.source === "yt_music" ? "YT Music" : "YouTube",
+        () => openUrl(s.url),
+      ),
+    );
+    if (nodes.length === 1) {
+      const p = document.createElement("p");
+      p.className = "empty-msg small";
+      p.textContent = "Sin coincidencias.";
+      nodes.push(p);
+    }
+    const hint = document.createElement("div");
+    hint.className = "search-kbd-hint";
+    hint.textContent = "↑/↓ navegar · Enter abrir · Esc cerrar";
+    nodes.push(hint);
+  }
+  els.searchDrop.replaceChildren(...nodes);
+  els.searchDrop.hidden = false;
+  els.globalSearch.setAttribute("aria-expanded", "true");
+  state.searchIndex = -1;
+}
+
+// ---------- miniplayer drag ----------
+function applyMiniPos() {
+  try {
+    const raw = localStorage.getItem("recapMiniPos");
+    if (!raw) return;
+    const { x, y } = JSON.parse(raw);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      els.miniplayer.classList.add("dragged");
+      els.miniplayer.style.left = `${Math.min(Math.max(8, x), innerWidth - 310)}px`;
+      els.miniplayer.style.top = `${Math.min(Math.max(8, y), innerHeight - 260)}px`;
+    }
+  } catch {
+    // Ignorar
+  }
+}
+function initMiniDrag() {
+  let dragging = false;
+  let offX = 0;
+  let offY = 0;
+  els.mpHead.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    dragging = true;
+    const r = els.miniplayer.getBoundingClientRect();
+    offX = e.clientX - r.left;
+    offY = e.clientY - r.top;
+    els.mpHead.setPointerCapture(e.pointerId);
+    els.miniplayer.classList.add("dragged");
+  });
+  els.mpHead.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const x = Math.min(Math.max(8, e.clientX - offX), innerWidth - 310);
+    const y = Math.min(Math.max(8, e.clientY - offY), innerHeight - 260);
+    els.miniplayer.style.left = `${x}px`;
+    els.miniplayer.style.top = `${y}px`;
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    const r = els.miniplayer.getBoundingClientRect();
+    localStorage.setItem(
+      "recapMiniPos",
+      JSON.stringify({ x: r.left, y: r.top }),
+    );
+  };
+  els.mpHead.addEventListener("pointerup", end);
+  els.mpHead.addEventListener("pointercancel", end);
 }
 
 // ---------- eventos ----------
 els.brandBtn.addEventListener("click", () => {
   const next = state.scope === "music" ? "youtube" : "music";
-  const route = state.route === "results" ? "home" : state.route;
-  navigate(next, route);
+  navigate(next, state.perScopeRoute[next] || "home");
   toast(next === "music" ? "Página Music" : "Página YouTube sin música");
 });
-
 els.sideNav.querySelectorAll(".side-link").forEach((b) => {
   b.addEventListener("click", () => navigate(state.scope, b.dataset.route));
 });
-
 els.newPlaylistBtn.addEventListener("click", () => {
   const ids = aggregateTracks(periodPlays())
     .map((t) => t.videoId)
@@ -1205,92 +1809,108 @@ let searchTimer = null;
 els.globalSearch.addEventListener("input", () => {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    const q = els.globalSearch.value.trim();
-    state.q = q;
-    if (!q) {
-      els.searchDrop.hidden = true;
-      return;
-    }
-    const vm = searchVM(q, scopeValue(), store);
-    const nodes = [];
-    const group = (title, items, make) => {
-      if (!items.length) return;
-      const t = document.createElement("div");
-      t.className = "search-group-title";
-      t.textContent = title;
-      nodes.push(t);
-      nodes.push(...items.map(make));
-    };
-    const hit = (artwork, title, sub, onOpen) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "search-hit";
-      if (artwork) {
-        const img = document.createElement("img");
-        img.src = artwork;
-        img.alt = "";
-        b.append(img);
-      }
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      const t = document.createElement("div");
-      t.className = "t";
-      t.textContent = title;
-      const s = document.createElement("div");
-      s.className = "s";
-      s.textContent = sub;
-      meta.append(t, s);
-      b.append(meta);
-      b.addEventListener("click", () => {
-        els.searchDrop.hidden = true;
-        onOpen();
-      });
-      return b;
-    };
-    group("Temas", vm.tracks.slice(0, 4), (t) =>
-      hit(t.artwork, t.title, t.artist, () => openUrl(t.videoUrl)),
-    );
-    group("Artistas", vm.artists.slice(0, 3), (a) =>
-      hit(a.artwork, a.name, `${a.plays} rep.`, () => openUrl(a.url)),
-    );
-    group("Canales", vm.channels.slice(0, 3), (v) =>
-      hit(v.avatar, v.name, "Canal visitado", () => openUrl(v.url)),
-    );
-    group("Búsquedas", vm.searches.slice(0, 3), (s) =>
-      hit("", s.query, s.source === "yt_music" ? "YT Music" : "YouTube", () =>
-        openUrl(s.url),
-      ),
-    );
-    if (nodes.length === 0) {
-      const p = document.createElement("p");
-      p.className = "empty-msg small";
-      p.textContent = "Sin coincidencias.";
-      nodes.push(p);
-    }
-    els.searchDrop.replaceChildren(...nodes);
-    els.searchDrop.hidden = false;
+    state.q = els.globalSearch.value.trim();
+    renderSearchDrop(state.q);
   }, 200);
 });
+els.globalSearch.addEventListener("focus", () => {
+  if (!els.globalSearch.value.trim()) renderSearchDrop("");
+});
 els.globalSearch.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    state.q = els.globalSearch.value.trim();
-    els.searchDrop.hidden = true;
-    navigate(state.scope, "results");
+  const nodes = searchHitNodes();
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (els.searchDrop.hidden) renderSearchDrop(els.globalSearch.value.trim());
+    setSearchIndex(
+      Math.min(state.searchIndex + 1, searchHitNodes().length - 1),
+    );
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    setSearchIndex(Math.max(state.searchIndex - 1, 0));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const active = searchHitNodes()[state.searchIndex];
+    if (active) active.click();
+    else {
+      state.q = els.globalSearch.value.trim();
+      els.searchDrop.hidden = true;
+      els.globalSearch.setAttribute("aria-expanded", "false");
+      navigate(state.scope, "results");
+    }
   } else if (e.key === "Escape") {
     els.searchDrop.hidden = true;
+    els.globalSearch.setAttribute("aria-expanded", "false");
   }
 });
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".search-wrap")) els.searchDrop.hidden = true;
-  if (!e.target.closest("#queuePop") && !e.target.closest("#pbQueue")) {
-    els.queuePop.hidden = true;
+  if (!e.target.closest(".search-wrap")) {
+    els.searchDrop.hidden = true;
+    els.globalSearch.setAttribute("aria-expanded", "false");
   }
+  if (!e.target.closest("#queuePop") && !e.target.closest("#pbQueue"))
+    els.queuePop.hidden = true;
+  if (!e.target.closest("#helpPop") && !e.target.closest("#helpBtn"))
+    els.helpPop.hidden = true;
 });
 
 document.addEventListener("keydown", (e) => {
   const typing = /^(input|textarea|select)$/i.test(e.target.tagName);
-  if (!typing && (e.key === "m" || e.key === "M")) {
-    els.brandBtn.click();
+  if (e.key === "Escape") {
+    els.helpPop.hidden = true;
+    els.queuePop.hidden = true;
+    els.searchDrop.hidden = true;
+    return;
+  }
+  if (
+    typing ||
+    e.metaKey ||
+    e.ctrlKey ||
+    e.altKey ||
+    els.confirmClearDialog.open
+  )
+    return;
+  switch (e.key) {
+    case " ":
+    case "k":
+    case "K":
+      e.preventDefault();
+      els.pbPlay.click();
+      break;
+    case "j":
+    case "J":
+      if (state.currentNp?.duration > 0)
+        sendControl("seek", Math.max(0, state.currentNp.currentTime - 5));
+      break;
+    case "l":
+    case "L":
+      if (state.currentNp?.duration > 0)
+        sendControl(
+          "seek",
+          Math.min(state.currentNp.duration, state.currentNp.currentTime + 5),
+        );
+      break;
+    case "m":
+    case "M":
+      if (e.shiftKey) els.brandBtn.click();
+      else sendControl("mute");
+      break;
+    case "n":
+    case "N":
+      sendControl("next");
+      break;
+    case "p":
+    case "P":
+      sendControl("prev");
+      break;
+    case "q":
+    case "Q":
+      els.pbQueue.click();
+      break;
+    case "?":
+    case "h":
+    case "H":
+      els.helpPop.hidden = !els.helpPop.hidden;
+      break;
   }
 });
 
@@ -1304,15 +1924,23 @@ els.pbNext.addEventListener("click", () => sendControl("next"));
 els.pbMute.addEventListener("click", () => sendControl("mute"));
 els.pbLoop.addEventListener("click", () => sendControl("loop"));
 els.pbShuffle.addEventListener("click", () => sendControl("shuffle"));
+els.pbLike.addEventListener("click", async () => {
+  if (!state.currentNp) return toast("No hay nada reproduciéndose.");
+  const ok = await sendControl("like");
+  if (ok) setTimeout(renderPlayer, 700);
+});
 els.pbJump.addEventListener("click", () => {
   if (state.currentTabId != null) jumpToTab(state.currentTabId);
   else toast("No hay pestaña activa.");
 });
 els.mpJump.addEventListener("click", () => els.pbJump.click());
+els.mpThumb.addEventListener("dblclick", () => els.pbJump.click());
 
 els.pbSeek.addEventListener("input", () => {
   state.seeking = true;
   const np = state.currentNp;
+  const pct = Number(els.pbSeek.value) / 10;
+  els.pbSeek.style.setProperty("--pb-fill", `${pct}%`);
   if (np?.duration > 0) {
     const secs = (Number(els.pbSeek.value) / 1000) * np.duration;
     els.pbTime.textContent = `${formatClock(secs)} / ${formatClock(np.duration)}`;
@@ -1321,35 +1949,44 @@ els.pbSeek.addEventListener("input", () => {
 els.pbSeek.addEventListener("change", () => {
   const np = state.currentNp;
   state.seeking = false;
-  if (np?.duration > 0) {
+  if (np?.duration > 0)
     sendControl("seek", (Number(els.pbSeek.value) / 1000) * np.duration);
-  }
 });
 let volTimer = null;
 els.pbVol.addEventListener("input", () => {
+  const v = Number(els.pbVol.value);
+  els.pbVol.style.setProperty("--pb-vol", `${v}%`);
   if (volTimer) clearTimeout(volTimer);
-  volTimer = setTimeout(
-    () => sendControl("volume", Number(els.pbVol.value) / 100),
-    120,
-  );
+  volTimer = setTimeout(() => sendControl("volume", v / 100), 120);
 });
 
 els.pbQueue.addEventListener("click", () => {
-  els.queuePop.hidden = !els.queuePop.hidden;
-  if (!els.queuePop.hidden) renderPlayer();
+  const open = els.queuePop.hidden;
+  els.queuePop.hidden = !open;
+  if (open) {
+    els.miniplayer.hidden = true;
+    renderPlayer();
+  }
 });
 els.miniToggleBtn.addEventListener("click", () => {
-  els.miniplayer.hidden = !els.miniplayer.hidden;
-  if (!els.miniplayer.hidden) renderPlayer();
+  const open = els.miniplayer.hidden;
+  els.miniplayer.hidden = !open;
+  if (open) {
+    els.queuePop.hidden = true;
+    applyMiniPos();
+    renderPlayer();
+  }
 });
 els.mpClose.addEventListener("click", () => {
   els.miniplayer.hidden = true;
 });
+els.helpBtn.addEventListener("click", () => {
+  els.helpPop.hidden = !els.helpPop.hidden;
+});
 
 els.importBtn.addEventListener("click", () => {
-  if (urlParams.get("import") === "1") {
+  if (urlParams.get("import") === "1")
     toast("Elegí tu archivo .zip o .json con el botón Importar.");
-  }
   els.importInput.click();
 });
 els.importInput.addEventListener("change", async (e) => {
@@ -1370,7 +2007,7 @@ els.importInput.addEventListener("change", async (e) => {
 });
 
 els.exportBtn.addEventListener("click", async () => {
-  const orig = els.exportBtn.textContent;
+  const orig = els.exportBtn.innerHTML;
   els.exportBtn.disabled = true;
   els.exportBtn.textContent = "⏳...";
   try {
@@ -1395,7 +2032,7 @@ els.exportBtn.addEventListener("click", async () => {
     toast(`Error al exportar: ${err.message}`, true);
   } finally {
     els.exportBtn.disabled = false;
-    els.exportBtn.textContent = orig;
+    els.exportBtn.innerHTML = orig;
   }
 });
 
@@ -1464,8 +2101,37 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
 });
 
+window.addEventListener("resize", () => {
+  hideTip();
+  if (!els.miniplayer.hidden) applyMiniPos();
+});
+
 // ---------- init ----------
+function skeletonHome() {
+  const host = els.routes.home;
+  host.replaceChildren();
+  const hero = document.createElement("div");
+  hero.className = "hero";
+  const l = document.createElement("div");
+  l.className = "skel-line";
+  l.style.width = "260px";
+  l.style.height = "26px";
+  hero.append(l);
+  host.append(hero);
+  for (let i = 0; i < 2; i++) {
+    const sec = document.createElement("section");
+    sec.className = "shelf";
+    const row = document.createElement("div");
+    row.className = "shelf-row";
+    row.append(...skeletonRow());
+    sec.append(row);
+    host.append(sec);
+  }
+}
+
 async function init() {
+  mountIcons(document);
+  skeletonHome();
   els.calHost.innerHTML = CALENDAR_MARKUP;
   domCal = {};
   for (const id of CALENDAR_DOM_IDS) domCal[id] = $(id);
@@ -1476,11 +2142,11 @@ async function init() {
   domCal.calMonthPlaylistBtn.addEventListener("click", () =>
     openInstantPlaylist(calUi.monthTopVideoIds),
   );
+  initMiniDrag();
 
   parseHash();
-  if (!location.hash) {
-    location.hash = `#/${state.scope}/home`;
-  }
+  if (!location.hash)
+    location.hash = `#/${state.scope}/${state.perScopeRoute[state.scope] || "home"}`;
 
   const [{ store: loaded, all }] = await Promise.all([
     loadStore(),
