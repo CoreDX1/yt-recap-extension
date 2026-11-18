@@ -2,7 +2,14 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
     <title>Mi Recap</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23ff4e45'/%3E%3Cstop offset='100%25' stop-color='%23ff99cc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='%2316161d'/%3E%3Cpath d='M12 9.5l11 6.5-11 6.5z' fill='url(%23g)'/%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -12,13 +19,16 @@
         <div class="header-actions">
           <button
             id="expandBtn"
+            type="button"
             class="pill-btn"
+            aria-label="Abrir en pestaña completa"
             title="Abrir en pestaña completa"
           >
-            ⛶
+            <span aria-hidden="true">⛶</span>
           </button>
           <button
             id="importBtn"
+            type="button"
             class="pill-btn"
             title="Importar backup .zip, .json o Google Takeout"
           >
@@ -32,6 +42,7 @@
           />
           <button
             id="exportBtn"
+            type="button"
             class="pill-btn"
             title="Exportar ZIP con JSON, tarjeta PNG e imágenes"
           >
@@ -45,19 +56,31 @@
       <!-- Tarjeta EN VIVO -->
       <div id="nowPlayingCard" class="now-playing">
         <div class="np-empty" id="npEmpty">
-          <span class="dot offline"></span> Nada reproduciéndose ahora
+          <span class="dot offline" aria-hidden="true"></span> Nada
+          reproduciéndose ahora
         </div>
         <div class="np-content" id="npContent" hidden>
-          <img id="npThumb" class="np-thumb" alt="" />
+          <img
+            id="npThumb"
+            class="np-thumb"
+            width="54"
+            height="54"
+            decoding="async"
+            alt=""
+          />
           <div class="np-info">
             <div class="np-top-line">
-              <span id="npStatusBadge" class="badge live">● En vivo</span>
+              <span id="npStatusBadge" class="badge live"
+                ><span aria-hidden="true">●</span> En vivo</span
+              >
               <span id="npSourceBadge" class="badge source">YouTube</span>
               <span id="npCategoryBadge" class="badge category" hidden
                 >Música</span
               >
               <span id="npFormatBadge" class="badge format" hidden>Short</span>
-              <span id="npLoopBadge" class="badge loop" hidden>🔁 Bucle</span>
+              <span id="npLoopBadge" class="badge loop" hidden
+                ><span aria-hidden="true">🔁</span> Bucle</span
+              >
             </div>
             <div id="npTitle" class="np-title">—</div>
             <div id="npArtist" class="np-artist">—</div>
@@ -72,6 +95,7 @@
             </div>
           </div>
         </div>
+
         <div id="npOtherWrap" class="np-other-wrap" hidden>
           <div id="npOtherHeader" class="np-other-header">
             Otras pestañas abiertas (0)
@@ -80,448 +104,591 @@
         </div>
       </div>
 
-      <div class="filters">
-        <select id="periodSelect">
-          <option value="7">Últimos 7 días</option>
-          <option value="30" selected>Últimos 30 días</option>
-          <option value="90">Últimos 3 meses</option>
-          <option value="365">Este año</option>
-          <option value="all">Todo</option>
-        </select>
-        <select id="sourceSelect">
-          <option value="all">Todo (YT + Music)</option>
-          <option value="yt_music">Solo YT Music</option>
-          <option value="youtube">Solo YouTube</option>
-          <option value="no_shorts">Excluir Shorts</option>
-          <option value="short">Solo Shorts</option>
-          <option value="live">Solo Directos</option>
-        </select>
-      </div>
+      <section class="filters-section" aria-label="Filtros globales">
+        <div class="filters">
+          <select id="periodSelect">
+            <option value="7">Últimos 7 días</option>
+            <option value="30" selected>Últimos 30 días</option>
+            <option value="90">Últimos 3 meses</option>
+            <option value="365">Este año</option>
+            <option value="all">Todo</option>
+          </select>
+          <select id="sourceSelect">
+            <option value="all">Todo (YT + Music)</option>
+            <option value="yt_music">Solo YT Music</option>
+            <option value="youtube">Solo YouTube</option>
+            <option value="no_shorts">Excluir Shorts</option>
+            <option value="short">Solo Shorts</option>
+            <option value="live">Solo Directos</option>
+          </select>
+        </div>
+      </section>
 
-      <nav class="tabs">
-        <button class="tab-btn active" data-tab="summary">Resumen</button>
-        <button class="tab-btn" data-tab="recent">Reciente</button>
-        <button class="tab-btn" data-tab="activity">Stats</button>
-        <button class="tab-btn" data-tab="calendar">Calendario</button>
-        <button class="tab-btn" data-tab="channels">Canales</button>
-        <button class="tab-btn" data-tab="likes">Likes</button>
+      <nav class="tabs" aria-label="Secciones principales">
+        <button type="button" class="tab-btn active" data-tab="summary">
+          Resumen
+        </button>
+        <button type="button" class="tab-btn" data-tab="recent">
+          Reciente
+        </button>
+        <button type="button" class="tab-btn" data-tab="activity">Stats</button>
+        <button type="button" class="tab-btn" data-tab="calendar">
+          Calendario
+        </button>
+        <button type="button" class="tab-btn" data-tab="channels">
+          Canales
+        </button>
+        <button type="button" class="tab-btn" data-tab="likes">Likes</button>
       </nav>
     </header>
 
-    <!-- TAB 1: RESUMEN -->
-    <main id="tab-summary" class="tab-panel active">
-      <section class="stats-grid">
-        <div class="stat-card">
-          <span class="stat-label">Tiempo total</span
-          ><strong id="totalTime">0 min</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Reproducciones</span
-          ><strong id="totalPlays">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Bucles detectados</span
-          ><strong id="totalLoops">🔁 0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Títulos únicos</span
-          ><strong id="uniqueCount">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Racha actual</span
-          ><strong id="streakDays">0 días</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Hora pico</span
-          ><strong id="peakHour">—</strong>
-        </div>
-      </section>
-
-      <section class="top-section">
-        <div class="section-header">
-          <h2>Top escuchado / visto</h2>
-          <div class="section-actions">
-            <button
-              id="exportImgBtn"
-              class="mini-btn"
-              hidden
-              title="Descargar tarjeta PNG"
+    <main id="appMain">
+      <!-- TAB 1: RESUMEN -->
+      <section id="tab-summary" class="tab-panel active">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Tiempo total</span
+            ><strong id="totalTime">0 min</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Reproducciones</span
+            ><strong id="totalPlays">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Bucles detectados</span
+            ><strong id="totalLoops"
+              ><span aria-hidden="true">🔁</span> 0</strong
             >
-              🖼️ PNG
-            </button>
-            <button
-              id="makePlaylistBtn"
-              class="mini-btn"
-              hidden
-              title="Abrir Top en una playlist instantánea"
-            >
-              ▶ Playlist
-            </button>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Títulos únicos</span
+            ><strong id="uniqueCount">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Racha actual</span
+            ><strong id="streakDays">0 días</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Hora pico</span
+            ><strong id="peakHour">—</strong>
           </div>
         </div>
-        <ul id="topList" class="top-list"></ul>
-        <p id="emptyMsg" class="empty-msg" hidden>
-          Todavía no hay datos en este período. Reproducí al menos 20 segundos
-          de un tema o video.
-        </p>
-      </section>
-    </main>
 
-    <!-- TAB 2: RECIENTE -->
-    <main id="tab-recent" class="tab-panel" hidden>
-      <div class="sub-pills">
-        <button class="sub-pill active" data-recent="plays">
-          ▶ Reproducciones
-        </button>
-        <button class="sub-pill" data-recent="likes">❤️ Me gusta</button>
-        <button class="sub-pill" data-recent="searches">🔍 Búsquedas</button>
-        <button class="sub-pill" data-recent="subs">🔔 Suscrip.</button>
-      </div>
-      <ul id="recentList" class="top-list tall"></ul>
-      <p id="recentEmpty" class="empty-msg" hidden>
-        Sin actividad reciente en esta categoría.
-      </p>
-    </main>
-
-    <!-- TAB 3: STATS -->
-    <main id="tab-activity" class="tab-panel" hidden>
-      <section id="categoriesBox" class="activity-box" hidden>
-        <h2>Categorías / Géneros</h2>
-        <div id="categoriesList" class="cat-bars"></div>
-      </section>
-
-      <section class="activity-box">
-        <h2>Actividad por hora del día (00h – 23h)</h2>
-        <div id="hoursChart" class="hours-chart"></div>
-        <div class="hours-labels">
-          <span>00h</span><span>06h</span><span>12h</span><span>18h</span
-          ><span>23h</span>
-        </div>
-      </section>
-
-      <section class="activity-box">
-        <h2>Formatos, origen e interacciones</h2>
-        <div id="breakdownStats" class="breakdown-grid"></div>
-      </section>
-
-      <section id="searchesBox" class="activity-box" hidden>
-        <h2>Top Búsquedas</h2>
-        <ul id="topSearchesList" class="top-list compact"></ul>
-      </section>
-
-      <section id="albumsBox" class="activity-box" hidden>
-        <h2>Top Álbumes (YT Music)</h2>
-        <ul id="topAlbumsList" class="top-list compact"></ul>
-      </section>
-
-      <section class="activity-box">
-        <h2>Top 5 Artistas / Canales</h2>
-        <ul id="topArtistsList" class="top-list compact"></ul>
-      </section>
-
-      <section id="skipsBox" class="activity-box" hidden>
-        <h2>Más salteadas (&lt; 20s)</h2>
-        <ul id="topSkipsList" class="top-list compact"></ul>
-      </section>
-    </main>
-
-    <!-- TAB 4: CALENDARIO (MES + AÑO + 12 FUNCIONES) -->
-    <main id="tab-calendar" class="tab-panel" hidden>
-      <!-- Controles superiores: Vista Mes / Año + Buscador -->
-      <div class="cal-toolbar">
-        <div class="cal-mode-switch">
-          <button class="cal-mode-btn active" data-calview="month">Mes</button>
-          <button class="cal-mode-btn" data-calview="year">Año</button>
-        </div>
-        <div class="cal-search-wrap">
-          <input
-            id="calSearchInput"
-            type="search"
-            class="cal-search-input"
-            placeholder="🔍 Filtrar días por canal o tema..."
-          />
-        </div>
-      </div>
-      <div id="calSearchSummary" class="cal-search-summary" hidden></div>
-
-      <!-- VISTA MES -->
-      <div id="calMonthView">
-        <section class="calendar-box">
-          <div class="cal-header">
-            <span id="calMonthLabel" class="cal-month-label">—</span>
-            <div class="cal-nav">
-              <button id="calTodayBtn" class="cal-today-btn" title="Ir a hoy">
-                Hoy
-              </button>
-              <button
-                id="calPrevBtn"
-                class="cal-arrow-btn"
-                title="Mes anterior"
-              >
-                ‹
-              </button>
-              <button
-                id="calNextBtn"
-                class="cal-arrow-btn"
-                title="Mes siguiente"
-              >
-                ›
-              </button>
-            </div>
-          </div>
-
-          <div class="cal-weekdays">
-            <span>L</span><span>M</span><span>X</span><span>J</span
-            ><span>V</span><span>S</span><span>D</span>
-          </div>
-          <div id="calGrid" class="cal-grid"></div>
-
-          <div class="cal-legend">
-            <span class="leg-txt">Menos</span>
-            <span class="leg-box heat-1"></span>
-            <span class="leg-box heat-2"></span>
-            <span class="leg-box heat-3"></span>
-            <span class="leg-box heat-4"></span>
-            <span class="leg-txt">Más</span>
-            <span class="leg-sep">·</span>
-            <span class="cal-dot like"></span><span class="leg-txt">Like</span>
-            <span class="cal-dot sub"></span><span class="leg-txt">Sub</span>
-          </div>
-        </section>
-
-        <!-- Resumen rápido del mes + Comparativa -->
-        <section id="calMonthStatsBox" class="cal-month-stats" hidden>
-          <div id="calMonthStatsGrid" class="stats-grid compact-grid"></div>
-          <div id="calMonthCompare" class="cal-compare-line" hidden></div>
-        </section>
-
-        <!-- Detalle del día seleccionado -->
-        <section class="cal-section">
-          <h2 id="calDayTitle">Actividad del día</h2>
-          <div id="calDaySummary" class="cal-day-summary" hidden></div>
-          <div id="calDayFilters" class="sub-pills compact-pills">
-            <button class="cal-pill sub-pill active" data-calday="all">
-              Todo
-            </button>
-            <button class="cal-pill sub-pill" data-calday="plays">
-              ▶ Reprod.
-            </button>
-            <button class="cal-pill sub-pill" data-calday="likes">
-              ❤️ Likes
-            </button>
-            <button class="cal-pill sub-pill" data-calday="subs">
-              🔔 Suscrip.
-            </button>
-            <button class="cal-pill sub-pill" data-calday="searches">
-              🔍 Búsquedas
-            </button>
-          </div>
-          <ul id="calDayList" class="top-list compact"></ul>
-          <p id="calDayEmpty" class="empty-msg small" hidden>
-            No se registró actividad en esta fecha.
-          </p>
-        </section>
-
-        <!-- Top del mes -->
-        <section class="cal-section">
+        <section class="top-section">
           <div class="section-header">
-            <h2 id="calMonthTopTitle">Top del mes</h2>
+            <h2>Top escuchado / visto</h2>
             <div class="section-actions">
               <button
-                id="calMonthImgBtn"
+                id="exportImgBtn"
+                type="button"
                 class="mini-btn"
                 hidden
-                title="Descargar tarjeta PNG del mes"
+                title="Descargar tarjeta PNG"
               >
-                🖼️ PNG
+                <span aria-hidden="true">🖼️</span> PNG
               </button>
               <button
-                id="calMonthPlaylistBtn"
+                id="makePlaylistBtn"
+                type="button"
                 class="mini-btn"
                 hidden
-                title="Crear playlist del mes"
+                title="Abrir Top en una playlist instantánea"
               >
-                ▶ Playlist
+                <span aria-hidden="true">▶</span> Playlist
               </button>
             </div>
           </div>
-          <ul id="calMonthTopList" class="top-list compact"></ul>
-          <p id="calMonthTopEmpty" class="empty-msg small" hidden>
-            Sin reproducciones en este mes.
+          <ul id="topList" class="top-list"></ul>
+          <p id="emptyMsg" class="empty-msg" hidden>
+            Todavía no hay datos en este período. Reproducí al menos 20 segundos
+            de un tema o video.
+          </p>
+        </section>
+      </section>
+
+      <!-- TAB 2: RECIENTE -->
+      <section id="tab-recent" class="tab-panel" hidden>
+        <div class="sub-pills">
+          <button type="button" class="sub-pill active" data-recent="plays">
+            <span aria-hidden="true">▶</span> Reproducciones
+          </button>
+          <button type="button" class="sub-pill" data-recent="likes">
+            <span aria-hidden="true">❤️</span> Me gusta
+          </button>
+          <button type="button" class="sub-pill" data-recent="searches">
+            <span aria-hidden="true">🔍</span> Búsquedas
+          </button>
+          <button type="button" class="sub-pill" data-recent="subs">
+            <span aria-hidden="true">🔔</span> Suscrip.
+          </button>
+        </div>
+        <ul id="recentList" class="top-list tall"></ul>
+        <p id="recentEmpty" class="empty-msg" hidden>
+          Sin actividad reciente en esta categoría.
+        </p>
+      </section>
+
+      <!-- TAB 3: STATS -->
+      <section id="tab-activity" class="tab-panel" hidden>
+        <section id="categoriesBox" class="activity-box" hidden>
+          <h2>Categorías / Géneros</h2>
+          <div id="categoriesList" class="cat-bars"></div>
+        </section>
+
+        <section class="activity-box">
+          <h2>Actividad por hora del día (00h – 23h)</h2>
+          <div id="hoursChart" class="hours-chart"></div>
+          <div class="hours-labels">
+            <span>00h</span><span>06h</span><span>12h</span><span>18h</span
+            ><span>23h</span>
+          </div>
+        </section>
+
+        <section class="activity-box">
+          <h2>Formatos, origen e interacciones</h2>
+          <div id="breakdownStats" class="breakdown-grid"></div>
+        </section>
+
+        <section id="searchesBox" class="activity-box" hidden>
+          <h2>Top Búsquedas</h2>
+          <ul id="topSearchesList" class="top-list compact"></ul>
+        </section>
+
+        <section id="albumsBox" class="activity-box" hidden>
+          <h2>Top Álbumes (YT Music)</h2>
+          <ul id="topAlbumsList" class="top-list compact"></ul>
+        </section>
+
+        <section class="activity-box">
+          <h2>Top 5 Artistas / Canales</h2>
+          <ul id="topArtistsList" class="top-list compact"></ul>
+        </section>
+
+        <section id="skipsBox" class="activity-box" hidden>
+          <h2>Más salteadas (&lt; 20s)</h2>
+          <ul id="topSkipsList" class="top-list compact"></ul>
+        </section>
+      </section>
+
+      <!-- TAB 4: CALENDARIO -->
+      <section id="tab-calendar" class="tab-panel" hidden>
+        <div class="cal-toolbar">
+          <div class="cal-mode-switch">
+            <button
+              type="button"
+              class="cal-mode-btn active"
+              data-calview="month"
+            >
+              Mes
+            </button>
+            <button type="button" class="cal-mode-btn" data-calview="year">
+              Año
+            </button>
+          </div>
+          <div class="cal-search-wrap">
+            <input
+              id="calSearchInput"
+              type="search"
+              class="cal-search-input"
+              autocomplete="off"
+              spellcheck="false"
+              enterkeyhint="search"
+              placeholder="🔍 Filtrar días por canal o tema..."
+            />
+          </div>
+        </div>
+        <div id="calSearchSummary" class="cal-search-summary" hidden></div>
+
+        <!-- VISTA MES -->
+        <div id="calMonthView">
+          <section class="calendar-box">
+            <div class="cal-header">
+              <span id="calMonthLabel" class="cal-month-label">—</span>
+              <div class="cal-nav">
+                <button
+                  id="calTodayBtn"
+                  type="button"
+                  class="cal-today-btn"
+                  title="Ir a hoy"
+                >
+                  Hoy
+                </button>
+                <button
+                  id="calPrevBtn"
+                  type="button"
+                  class="cal-arrow-btn"
+                  aria-label="Mes anterior"
+                  title="Mes anterior"
+                >
+                  <span aria-hidden="true">‹</span>
+                </button>
+                <button
+                  id="calNextBtn"
+                  type="button"
+                  class="cal-arrow-btn"
+                  aria-label="Mes siguiente"
+                  title="Mes siguiente"
+                >
+                  <span aria-hidden="true">›</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="cal-weekdays">
+              <span><abbr title="Lunes">L</abbr></span>
+              <span><abbr title="Martes">M</abbr></span>
+              <span><abbr title="Miércoles">X</abbr></span>
+              <span><abbr title="Jueves">J</abbr></span>
+              <span><abbr title="Viernes">V</abbr></span>
+              <span><abbr title="Sábado">S</abbr></span>
+              <span><abbr title="Domingo">D</abbr></span>
+            </div>
+            <div id="calGrid" class="cal-grid"></div>
+
+            <div class="cal-legend">
+              <span class="leg-txt">Menos</span>
+              <span class="leg-box heat-1" aria-hidden="true"></span>
+              <span class="leg-box heat-2" aria-hidden="true"></span>
+              <span class="leg-box heat-3" aria-hidden="true"></span>
+              <span class="leg-box heat-4" aria-hidden="true"></span>
+              <span class="leg-txt">Más</span>
+              <span class="leg-sep" aria-hidden="true">·</span>
+              <span class="cal-dot like" aria-hidden="true"></span
+              ><span class="leg-txt">Like</span>
+              <span class="cal-dot sub" aria-hidden="true"></span
+              ><span class="leg-txt">Sub</span>
+            </div>
+          </section>
+
+          <section id="calMonthStatsBox" class="cal-month-stats" hidden>
+            <div id="calMonthStatsGrid" class="stats-grid compact-grid"></div>
+            <div id="calMonthCompare" class="cal-compare-line" hidden></div>
+          </section>
+
+          <section class="cal-section">
+            <h2 id="calDayTitle">Actividad del día</h2>
+            <div id="calDaySummary" class="cal-day-summary" hidden></div>
+            <div id="calDayFilters" class="sub-pills compact-pills">
+              <button
+                type="button"
+                class="cal-pill sub-pill active"
+                data-calday="all"
+              >
+                Todo
+              </button>
+              <button
+                type="button"
+                class="cal-pill sub-pill"
+                data-calday="plays"
+              >
+                <span aria-hidden="true">▶</span> Reprod.
+              </button>
+              <button
+                type="button"
+                class="cal-pill sub-pill"
+                data-calday="likes"
+              >
+                <span aria-hidden="true">❤️</span> Likes
+              </button>
+              <button
+                type="button"
+                class="cal-pill sub-pill"
+                data-calday="subs"
+              >
+                <span aria-hidden="true">🔔</span> Suscrip.
+              </button>
+              <button
+                type="button"
+                class="cal-pill sub-pill"
+                data-calday="searches"
+              >
+                <span aria-hidden="true">🔍</span> Búsquedas
+              </button>
+            </div>
+            <ul id="calDayList" class="top-list compact"></ul>
+            <p id="calDayEmpty" class="empty-msg small" hidden>
+              No se registró actividad en esta fecha.
+            </p>
+          </section>
+
+          <section class="cal-section">
+            <div class="section-header">
+              <h2 id="calMonthTopTitle">Top del mes</h2>
+              <div class="section-actions">
+                <button
+                  id="calMonthImgBtn"
+                  type="button"
+                  class="mini-btn"
+                  hidden
+                  title="Descargar tarjeta PNG del mes"
+                >
+                  <span aria-hidden="true">🖼️</span> PNG
+                </button>
+                <button
+                  id="calMonthPlaylistBtn"
+                  type="button"
+                  class="mini-btn"
+                  hidden
+                  title="Crear playlist del mes"
+                >
+                  <span aria-hidden="true">▶</span> Playlist
+                </button>
+              </div>
+            </div>
+            <ul id="calMonthTopList" class="top-list compact"></ul>
+            <p id="calMonthTopEmpty" class="empty-msg small" hidden>
+              Sin reproducciones en este mes.
+            </p>
+          </section>
+
+          <section id="calMonthChannelsBox" class="activity-box" hidden>
+            <h2 id="calMonthChannelsTitle">
+              <span aria-hidden="true">⏱️</span> Top canales del mes
+            </h2>
+            <ul id="calMonthChannelsList" class="top-list compact"></ul>
+          </section>
+
+          <section id="calMonthCatsBox" class="activity-box" hidden>
+            <h2 id="calMonthCatsTitle">Categorías del mes</h2>
+            <div id="calMonthCatsList" class="cat-bars"></div>
+          </section>
+
+          <section id="calWeekdayBox" class="activity-box" hidden>
+            <h2>Rendimiento por día de la semana</h2>
+            <div id="calWeekdayChart" class="weekday-chart"></div>
+          </section>
+
+          <section id="calMonthSocialBox" class="cal-section" hidden>
+            <h2 id="calMonthSocialTitle">Me gusta y suscripciones del mes</h2>
+            <ul id="calMonthSocialList" class="top-list compact"></ul>
+          </section>
+
+          <section class="cal-section">
+            <h2 id="calWeeksTitle">Top por semana</h2>
+            <div id="calWeeksList" class="weeks-list"></div>
+          </section>
+        </div>
+
+        <!-- VISTA AÑO -->
+        <div id="calYearView" hidden>
+          <section class="calendar-box">
+            <div class="cal-header">
+              <span id="calYearLabel" class="cal-month-label">2026</span>
+              <div class="cal-nav">
+                <button
+                  id="calYearPrevBtn"
+                  type="button"
+                  class="cal-arrow-btn"
+                  aria-label="Año anterior"
+                  title="Año anterior"
+                >
+                  <span aria-hidden="true">‹</span>
+                </button>
+                <button
+                  id="calYearNextBtn"
+                  type="button"
+                  class="cal-arrow-btn"
+                  aria-label="Año siguiente"
+                  title="Año siguiente"
+                >
+                  <span aria-hidden="true">›</span>
+                </button>
+              </div>
+            </div>
+            <div id="calYearStats" class="cal-year-stats"></div>
+            <div id="calYearHeatmapScroll" class="year-heatmap-scroll">
+              <div id="calYearGrid" class="year-heatmap-grid"></div>
+            </div>
+          </section>
+
+          <section class="cal-section">
+            <h2>Resumen de los 12 meses</h2>
+            <div id="calYearMonthsGrid" class="year-months-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- TAB 5: CANALES -->
+      <section id="tab-channels" class="tab-panel" hidden>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Canales únicos</span
+            ><strong id="chUniqueCount">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Visitas a canales</span
+            ><strong id="chTotalVisits">0</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Suscrip. nuevas</span
+            ><strong id="chNewSubs"
+              ><span aria-hidden="true">🔔</span> 0</strong
+            >
+          </div>
+        </div>
+
+        <section class="cal-section">
+          <h2>
+            <span aria-hidden="true">⏱️</span> Top canales por duración
+            reproducida
+          </h2>
+          <ul id="channelsDurationList" class="top-list compact"></ul>
+          <p id="channelsDurationEmpty" class="empty-msg small" hidden>
+            Todavía no hay reproducciones registradas por canal.
           </p>
         </section>
 
-        <!-- Top Canales del mes (por duración) -->
-        <section id="calMonthChannelsBox" class="activity-box" hidden>
-          <h2 id="calMonthChannelsTitle">⏱️ Top canales del mes</h2>
-          <ul id="calMonthChannelsList" class="top-list compact"></ul>
-        </section>
-
-        <!-- Categorías del mes + Rendimiento Lun-Dom -->
-        <section id="calMonthCatsBox" class="activity-box" hidden>
-          <h2 id="calMonthCatsTitle">Categorías del mes</h2>
-          <div id="calMonthCatsList" class="cat-bars"></div>
-        </section>
-
-        <section id="calWeekdayBox" class="activity-box" hidden>
-          <h2>Rendimiento por día de la semana</h2>
-          <div id="calWeekdayChart" class="weekday-chart"></div>
-        </section>
-
-        <!-- Me gusta y suscripciones del mes -->
-        <section id="calMonthSocialBox" class="cal-section" hidden>
-          <h2 id="calMonthSocialTitle">Me gusta y suscripciones del mes</h2>
-          <ul id="calMonthSocialList" class="top-list compact"></ul>
-        </section>
-
-        <!-- Top por semana real (Lun-Dom) -->
         <section class="cal-section">
-          <h2 id="calWeeksTitle">Top por semana</h2>
-          <div id="calWeeksList" class="weeks-list"></div>
-        </section>
-      </div>
-
-      <!-- VISTA AÑO (365 DÍAS + 12 MESES) -->
-      <div id="calYearView" hidden>
-        <section class="calendar-box">
-          <div class="cal-header">
-            <span id="calYearLabel" class="cal-month-label">2026</span>
-            <div class="cal-nav">
-              <button
-                id="calYearPrevBtn"
-                class="cal-arrow-btn"
-                title="Año anterior"
-              >
-                ‹
-              </button>
-              <button
-                id="calYearNextBtn"
-                class="cal-arrow-btn"
-                title="Año siguiente"
-              >
-                ›
-              </button>
-            </div>
+          <h2>Ranking general de canales</h2>
+          <div class="sub-pills compact-pills">
+            <button
+              type="button"
+              class="ch-sort-pill sub-pill active"
+              data-chsort="time"
+            >
+              <span aria-hidden="true">⏱️</span> Duración
+            </button>
+            <button
+              type="button"
+              class="ch-sort-pill sub-pill"
+              data-chsort="visits"
+            >
+              <span aria-hidden="true">👁️</span> Visitas
+            </button>
+            <button
+              type="button"
+              class="ch-sort-pill sub-pill"
+              data-chsort="plays"
+            >
+              <span aria-hidden="true">▶</span> Reprod.
+            </button>
           </div>
-          <div id="calYearStats" class="cal-year-stats"></div>
-          <div id="calYearHeatmapScroll" class="year-heatmap-scroll">
-            <div id="calYearGrid" class="year-heatmap-grid"></div>
+          <div class="sub-pills compact-pills">
+            <button
+              type="button"
+              class="ch-dur-pill sub-pill active"
+              data-chmin="0"
+            >
+              Todos
+            </button>
+            <button type="button" class="ch-dur-pill sub-pill" data-chmin="1">
+              &gt; 0m
+            </button>
+            <button type="button" class="ch-dur-pill sub-pill" data-chmin="900">
+              +15m
+            </button>
+            <button
+              type="button"
+              class="ch-dur-pill sub-pill"
+              data-chmin="3600"
+            >
+              +1h
+            </button>
           </div>
+          <ul id="channelsTopList" class="top-list compact"></ul>
+          <p id="channelsEmpty" class="empty-msg small" hidden>
+            No hay canales que coincidan con este filtro.
+          </p>
         </section>
 
         <section class="cal-section">
-          <h2>Resumen de los 12 meses</h2>
-          <div id="calYearMonthsGrid" class="year-months-grid"></div>
+          <h2>Últimas visitas directas a canales</h2>
+          <ul id="channelsRecentList" class="top-list compact"></ul>
+          <p id="channelsRecentEmpty" class="empty-msg small" hidden>
+            Entrá a cualquier canal en YouTube para registrarlo aquí.
+          </p>
         </section>
-      </div>
-    </main>
-
-    <!-- TAB 5: CANALES -->
-    <main id="tab-channels" class="tab-panel" hidden>
-      <section class="stats-grid">
-        <div class="stat-card">
-          <span class="stat-label">Canales únicos</span
-          ><strong id="chUniqueCount">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Visitas a canales</span
-          ><strong id="chTotalVisits">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Suscrip. nuevas</span
-          ><strong id="chNewSubs">🔔 0</strong>
-        </div>
       </section>
 
-      <section class="cal-section">
-        <h2>⏱️ Top canales por duración reproducida</h2>
-        <ul id="channelsDurationList" class="top-list compact"></ul>
-        <p id="channelsDurationEmpty" class="empty-msg small" hidden>
-          Todavía no hay reproducciones registradas por canal.
-        </p>
-      </section>
-
-      <section class="cal-section">
-        <h2>Ranking general de canales</h2>
-        <div class="sub-pills compact-pills">
-          <button class="ch-sort-pill sub-pill active" data-chsort="time">
-            ⏱️ Duración
-          </button>
-          <button class="ch-sort-pill sub-pill" data-chsort="visits">
-            👁️ Visitas
-          </button>
-          <button class="ch-sort-pill sub-pill" data-chsort="plays">
-            ▶ Reprod.
-          </button>
+      <!-- TAB 6: LIKES, SUSCRIPCIONES Y BÚSQUEDAS -->
+      <section id="tab-likes" class="tab-panel" hidden>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Me gusta</span
+            ><strong id="lkTotalLikes"
+              ><span aria-hidden="true">❤️</span> 0</strong
+            >
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Suscrip. nuevas</span
+            ><strong id="lkTotalSubs"
+              ><span aria-hidden="true">🔔</span> 0</strong
+            >
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Búsquedas</span
+            ><strong id="lkTotalSearches"
+              ><span aria-hidden="true">🔍</span> 0</strong
+            >
+          </div>
         </div>
-        <div class="sub-pills compact-pills">
-          <button class="ch-dur-pill sub-pill active" data-chmin="0">
-            Todos
-          </button>
-          <button class="ch-dur-pill sub-pill" data-chmin="1">&gt; 0m</button>
-          <button class="ch-dur-pill sub-pill" data-chmin="900">+15m</button>
-          <button class="ch-dur-pill sub-pill" data-chmin="3600">+1h</button>
-        </div>
-        <ul id="channelsTopList" class="top-list compact"></ul>
-        <p id="channelsEmpty" class="empty-msg small" hidden>
-          No hay canales que coincidan con este filtro.
-        </p>
-      </section>
 
-      <section class="cal-section">
-        <h2>Últimas visitas directas a canales</h2>
-        <ul id="channelsRecentList" class="top-list compact"></ul>
-        <p id="channelsRecentEmpty" class="empty-msg small" hidden>
-          Entrá a cualquier canal en YouTube para registrarlo aquí.
-        </p>
-      </section>
-    </main>
+        <section class="cal-section">
+          <h2>
+            <span aria-hidden="true">❤️</span> Videos y canciones con Me gusta
+          </h2>
+          <ul id="likesList" class="top-list compact"></ul>
+          <p id="likesEmpty" class="empty-msg small" hidden>
+            Todavía no diste Me gusta en este período.
+          </p>
+        </section>
 
-    <!-- TAB 6: LIKES, SUSCRIPCIONES Y BÚSQUEDAS -->
-    <main id="tab-likes" class="tab-panel" hidden>
-      <section class="stats-grid">
-        <div class="stat-card">
-          <span class="stat-label">Me gusta</span
-          ><strong id="lkTotalLikes">❤️ 0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Suscrip. nuevas</span
-          ><strong id="lkTotalSubs">🔔 0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Búsquedas</span
-          ><strong id="lkTotalSearches">🔍 0</strong>
-        </div>
-      </section>
+        <section class="cal-section">
+          <h2><span aria-hidden="true">🔔</span> Nuevas suscripciones</h2>
+          <ul id="subsList" class="top-list compact"></ul>
+          <p id="subsEmpty" class="empty-msg small" hidden>
+            Todavía no registraste nuevas suscripciones en este período.
+          </p>
+        </section>
 
-      <section class="cal-section">
-        <h2>❤️ Videos y canciones con Me gusta</h2>
-        <ul id="likesList" class="top-list compact"></ul>
-        <p id="likesEmpty" class="empty-msg small" hidden>
-          Todavía no diste Me gusta en este período.
-        </p>
-      </section>
-
-      <section class="cal-section">
-        <h2>🔔 Nuevas suscripciones</h2>
-        <ul id="subsList" class="top-list compact"></ul>
-        <p id="subsEmpty" class="empty-msg small" hidden>
-          Todavía no registraste nuevas suscripciones en este período.
-        </p>
-      </section>
-
-      <section class="cal-section">
-        <h2>🔍 Últimas búsquedas</h2>
-        <ul id="socialSearchesList" class="top-list compact"></ul>
-        <p id="socialSearchesEmpty" class="empty-msg small" hidden>
-          Sin búsquedas registradas en este período.
-        </p>
+        <section class="cal-section">
+          <h2><span aria-hidden="true">🔍</span> Últimas búsquedas</h2>
+          <ul id="socialSearchesList" class="top-list compact"></ul>
+          <p id="socialSearchesEmpty" class="empty-msg small" hidden>
+            Sin búsquedas registradas en este período.
+          </p>
+        </section>
       </section>
     </main>
 
     <footer>
-      <button id="clearBtn" class="danger-link">Borrar historial local</button>
+      <button id="clearBtn" type="button" class="danger-link">
+        Borrar historial local
+      </button>
     </footer>
+
+    <!-- Plantillas nativas preparadas para filas dinámicas -->
+    <template id="trackRowTpl">
+      <li class="top-item">
+        <span class="rank"></span>
+        <img class="thumb" loading="lazy" decoding="async" alt="" />
+        <div class="meta">
+          <div class="track-title"></div>
+          <div class="track-sub"></div>
+        </div>
+        <div class="track-stats"></div>
+      </li>
+    </template>
+
+    <template id="otherTabTpl">
+      <li>
+        <button type="button" class="np-other-btn">
+          <span class="np-other-state"></span>
+          <img
+            class="np-other-thumb"
+            width="24"
+            height="24"
+            decoding="async"
+            alt=""
+          />
+          <div class="meta">
+            <div class="np-other-title"></div>
+            <div class="np-other-sub"></div>
+          </div>
+          <span class="np-other-time"></span>
+        </button>
+      </li>
+    </template>
 
     <script type="module" src="src/popup.js"></script>
   </body>
