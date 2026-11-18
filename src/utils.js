@@ -19,6 +19,33 @@ export function translateCategory(cat) {
   return cat ? CATEGORY_LABELS[cat] || cat : "";
 }
 
+// --- FASE 2: clasificación de contenido musical ---
+// Canales auto-generados de artistas ("Artist - Topic" / "- Tema").
+export function isTopicChannelName(name) {
+  return /[-–—]\s*(topic|tema)\s*$/i.test(String(name || "").trim());
+}
+
+// Regla amplia (la misma que content.js): categoría Music (incluye
+// AMVs/lyrics/covers) || musicVideoType presente || canal - Topic.
+// Nota: content.js mantiene su propia copia porque es un content script
+// clásico (no módulo). Si cambiás la regla, actualizá ambos lados.
+export function computeIsMusicFlag(category, musicVideoType, artist) {
+  return (
+    category === "Music" ||
+    Boolean(musicVideoType) ||
+    isTopicChannelName(artist)
+  );
+}
+
+// Punto de verdad único: música = plataforma YT Music o flag de contenido.
+export function isMusicItem(item) {
+  return (
+    item?.source === "yt_music" ||
+    item?.isMusic === true ||
+    item?.contentType === "music"
+  );
+}
+
 export function toDateKey(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -138,8 +165,11 @@ export function matchesFilter(
   }
   const cType =
     item.contentType || (item.source === "yt_music" ? "music" : "video");
-  if (sourceValue === "yt_music") return item.source === "yt_music";
-  if (sourceValue === "youtube") return item.source === "youtube";
+  // FASE 2: "YT Music" = contenido musical (cualquier plataforma);
+  // "YouTube" = plataforma YouTube sin contenido musical.
+  if (sourceValue === "yt_music") return isMusicItem(item);
+  if (sourceValue === "youtube")
+    return item.source === "youtube" && !isMusicItem(item);
   if (sourceValue === "no_shorts") return cType !== "short";
   if (sourceValue === "short") return cType === "short";
   if (sourceValue === "live") return cType === "live";
@@ -156,8 +186,9 @@ export function matchesPeriodAndSourceOnly(
     const cutoff = Date.now() - Number(periodValue) * 24 * 60 * 60 * 1000;
     if (item.timestamp < cutoff) return false;
   }
-  if (sourceValue === "yt_music") return item.source === "yt_music";
-  if (sourceValue === "youtube") return item.source === "youtube";
+  if (sourceValue === "yt_music") return isMusicItem(item);
+  if (sourceValue === "youtube")
+    return item.source === "youtube" && !isMusicItem(item);
   return true;
 }
 
@@ -198,7 +229,7 @@ export function sanitizeFileSlug(text) {
   return (
     String(text || "imagen")
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[̀-ͯ]/g, "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")

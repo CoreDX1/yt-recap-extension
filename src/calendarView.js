@@ -6,6 +6,7 @@ import {
   formatClock,
   formatDuration,
   aggregateTracks,
+  isMusicItem,
 } from "./utils.js";
 
 function getHeatLevel(seconds, hasActivity) {
@@ -354,7 +355,7 @@ export function renderCalendarView({
         p.artist || "YouTube",
         (dayCh.get(p.artist || "YouTube") || 0) + (p.seconds || 1),
       );
-      const c = p.category || (p.source === "yt_music" ? "Music" : "");
+      const c = p.category || (isMusicItem(p) ? "Music" : "");
       if (c) dayCat.set(c, (dayCat.get(c) || 0) + (p.seconds || 1));
     }
     const topDayCh = [...dayCh.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -560,7 +561,7 @@ export function renderCalendarView({
       if (!curCh.url && it.channelUrl) curCh.url = it.channelUrl;
       mChannels.set(ak, curCh);
 
-      const cat = it.category || (it.source === "yt_music" ? "Music" : "");
+      const cat = it.category || (isMusicItem(it) ? "Music" : "");
       if (cat) {
         const curC = mCats.get(cat) || { plays: 0, seconds: 0 };
         curC.plays += 1;

@@ -13,6 +13,8 @@ import {
   getGroupKey,
   sanitizeFileSlug,
   getExtFromMime,
+  isMusicItem,
+  computeIsMusicFlag,
 } from "./utils.js";
 import { buildZipBlob, extractJsonFromZipBuffer } from "./zip.js";
 import { importBackupPayload } from "./takeout.js";
@@ -25,6 +27,10 @@ const urlParams = new URLSearchParams(location.search);
 const isFullMode = urlParams.get("full") === "1";
 if (isFullMode) document.body.classList.add("full-mode");
 
+// Fase 5: enriquecimiento de importados sin categoría.
+const ENRICH_CONCURRENCY = 4;
+const ENRICH_MAX_PER_RUN = 200;
+
 const dom = {
   periodSelect: $("periodSelect"),
   sourceSelect: $("sourceSelect"),
@@ -34,6 +40,7 @@ const dom = {
   exportBtn: $("exportBtn"),
   statusBanner: $("statusBanner"),
   clearBtn: $("clearBtn"),
+  enrichMusicBtn: $("enrichMusicBtn"),
   confirmClearDialog: $("confirmClearDialog"),
   cancelClearBtn: $("cancelClearBtn"),
   confirmClearBtn: $("confirmClearBtn"),
@@ -195,6 +202,66 @@ function showStatus(msg, isError = false) {
   }, 6000);
 }
 
+// --- FASE 3: MIGRACIÓN IDEMPOTENTE DE FLAGS DE MÚSICA ---
+// Marca isMusic en history (categoría Music / canal - Topic / plataforma YTM),
+// y hereda el flag en skips y likes por join de videoId/trackKey.
+// No toca búsquedas, visitas ni suscripciones (eventos de plataforma).
+function migrateMusicFlags(data) {
+  let changed = false;
+  const byVideo = new Map();
+  const byTrack = new Map();
+
+  for (const it of data.history) {
+    const flag =
+      it.source === "yt_music" ||
+      it.isMusic === true ||
+      computeIsMusicFlag(it.category, "", it.artist);
+    if (flag && it.isMusic !== true) {
+      it.isMusic = true;
+      changed = true;
+    }
+    if (it.isMusic) {
+      if (it.videoId) byVideo.set(it.videoId, true);
+      if (it.trackKey) byTrack.set(it.trackKey, true);
+    }
+  }
+
+  for (const sk of data.skips) {
+    const flag =
+      sk.isMusic === true ||
+      computeIsMusicFlag(sk.category, "", sk.artist) ||
+      (sk.videoId && byVideo.get(sk.videoId)) ||
+      (sk.trackKey && byTrack.get(sk.trackKey));
+    if (flag && sk.isMusic !== true) {
+      sk.isMusic = true;
+      changed = true;
+    }
+  }
+
+  for (const it of data.interactions) {
+    if (it.type !== "like") continue;
+    const flag =
+      it.isMusic === true ||
+      computeIsMusicFlag(it.category, "", it.artist) ||
+      (it.videoId && byVideo.get(it.videoId)) ||
+      (it.targetKey && byTrack.get(it.targetKey));
+    if (flag && it.isMusic !== true) {
+      it.isMusic = true;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+async function persistMusicFlags() {
+  await chrome.storage.local.set({
+    history: store.history,
+    skips: store.skips,
+    interactions: store.interactions,
+  });
+}
+
 // --- COMPONENTES DE FILA ---
 function buildTrackRow(
   rankText,
@@ -329,8 +396,13 @@ function renderNowPlaying(np) {
 
   dom.npStatusBadge.textContent = np.paused ? "⏸ En pausa" : "● En vivo";
   dom.npStatusBadge.classList.toggle("paused", np.paused);
+  // FASE 2: la plataforma se mantiene real; la música en www se etiqueta.
   dom.npSourceBadge.textContent =
-    np.source === "yt_music" ? "YT Music" : "YouTube";
+    np.source === "yt_music"
+      ? "YT Music"
+      : np.isMusic
+        ? "YouTube · Música"
+        : "YouTube";
 
   if (np.category) {
     dom.npCategoryBadge.textContent = translateCategory(np.category);
@@ -415,7 +487,12 @@ function renderOtherOpenTabs(others) {
       title.className = "np-other-title";
       title.textContent = tab.title;
 
-      const srcLabel = tab.source === "yt_music" ? "YT Music" : "YouTube";
+      const srcLabel =
+        tab.source === "yt_music"
+          ? "YT Music"
+          : tab.isMusic
+            ? "YouTube · Música"
+            : "YouTube";
       const sub = document.createElement("div");
       sub.className = "np-other-sub";
       sub.textContent = `${srcLabel} · ${tab.artist}`;
@@ -644,6 +721,8 @@ function renderRecentTab() {
         const tags = [];
         if (item.isLoop) tags.push("🔁 Bucle");
         if (item.category) tags.push(translateCategory(item.category));
+        if (item.isMusic && item.source === "youtube" && !item.category)
+          tags.push("Música");
         if (item.contentType === "short") tags.push("Short");
         if (item.contentType === "live") tags.push("Live");
         if (item.playbackRate && item.playbackRate !== 1)
@@ -712,7 +791,8 @@ function renderActivityTab() {
     const ctx = item.context || "direct";
     contextCounts[ctx] = (contextCounts[ctx] || 0) + 1;
 
-    const catKey = item.category || (item.source === "yt_music" ? "Music" : "");
+    // FASE 2: la categoría implícita "Music" sigue al contenido, no al host.
+    const catKey = item.category || (isMusicItem(item) ? "Music" : "");
     if (catKey) {
       const c = categoriesMap.get(catKey) || { plays: 0, seconds: 0 };
       c.plays += 1;
@@ -810,9 +890,22 @@ function renderActivityTab() {
     rateCount > 0
       ? `${(rateSum / rateCount).toFixed(2).replace(/\.00$/, "")}x`
       : "1x";
+
+  // FASE 2: chips por contenido musical, no por plataforma.
+  const musicCount = filtered.filter(isMusicItem).length;
+  const musicOnYouTube = filtered.filter(
+    (it) => it.source === "youtube" && isMusicItem(it),
+  ).length;
+  const videosNonMusic = filtered.filter((it) => {
+    const cType =
+      it.contentType || (it.source === "yt_music" ? "music" : "video");
+    return cType === "video" && !isMusicItem(it);
+  }).length;
+
   const chips = [
-    ["Videos", formatCounts.video || 0],
-    ["YT Music", formatCounts.music || 0],
+    ["Música", musicCount],
+    ["Música en YouTube", musicOnYouTube],
+    ["Videos (no música)", videosNonMusic],
     ["Shorts", formatCounts.short || 0],
     ["Directos", formatCounts.live || 0],
     [
@@ -1275,12 +1368,115 @@ dom.importInput.addEventListener("change", async (e) => {
     const { updatedData, message } = importBackupPayload(parsed, store);
     await chrome.storage.local.set(updatedData);
     Object.assign(store, updatedData);
+    // FASE 3: los backups viejos/Takeout traen registros sin flag.
+    if (migrateMusicFlags(store)) await persistMusicFlags();
     invalidateAllTabs();
     showStatus(message);
   } catch (err) {
     showStatus(`Error al importar: ${err.message}`, true);
   } finally {
     dom.importInput.value = "";
+  }
+});
+
+// --- FASE 5: RECLASIFICAR IMPORTADOS SIN CATEGORÍA ---
+dom.enrichMusicBtn.addEventListener("click", async () => {
+  const candidates = [];
+  const seen = new Set();
+  const push = (it) => {
+    if (
+      it &&
+      it.source === "youtube" &&
+      !it.category &&
+      !it.isMusic &&
+      it.videoId &&
+      !seen.has(it.videoId)
+    ) {
+      seen.add(it.videoId);
+      candidates.push(it.videoId);
+    }
+  };
+  store.history.forEach(push);
+  store.skips.forEach(push);
+  store.interactions.forEach((it) => it.type === "like" && push(it));
+
+  if (candidates.length === 0) {
+    showStatus("No hay registros de YouTube sin categoría para reclasificar.");
+    return;
+  }
+
+  const batch = candidates.slice(0, ENRICH_MAX_PER_RUN);
+  const remaining = candidates.length - batch.length;
+  const orig = dom.enrichMusicBtn.textContent;
+  dom.enrichMusicBtn.disabled = true;
+
+  const results = new Map();
+  let done = 0;
+
+  try {
+    for (let i = 0; i < batch.length; i += ENRICH_CONCURRENCY) {
+      await Promise.all(
+        batch.slice(i, i + ENRICH_CONCURRENCY).map(async (vid) => {
+          try {
+            const res = await fetch(
+              `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}`,
+              { credentials: "omit" },
+            );
+            const html = res.ok ? await res.text() : "";
+            const cat =
+              html
+                .match(/"category"\s*:\s*"([^"]+)"/)?.[1]
+                ?.replace(/\\u0026/g, "&") || "";
+            const mtype =
+              html.match(/"musicVideoType"\s*:\s*"([^"]+)"/)?.[1] || "";
+            results.set(vid, { cat, mtype });
+          } catch {
+            results.set(vid, { cat: "", mtype: "" });
+          } finally {
+            done += 1;
+            dom.enrichMusicBtn.textContent = `⏳ ${done}/${batch.length}`;
+          }
+        }),
+      );
+    }
+
+    let updated = 0;
+    const apply = (it) => {
+      if (!it || it.source !== "youtube" || !it.videoId) return;
+      const r = results.get(it.videoId);
+      if (!r || (!r.cat && !r.mtype)) return;
+      let changed = false;
+      if (r.cat && !it.category) {
+        it.category = r.cat;
+        changed = true;
+      }
+      if (
+        computeIsMusicFlag(it.category, r.mtype, it.artist) &&
+        it.isMusic !== true
+      ) {
+        it.isMusic = true;
+        changed = true;
+      }
+      if (changed) updated += 1;
+    };
+    store.history.forEach(apply);
+    store.skips.forEach(apply);
+    store.interactions.forEach((it) => it.type === "like" && apply(it));
+
+    if (updated > 0) {
+      await persistMusicFlags();
+      invalidateAllTabs();
+    }
+    showStatus(
+      updated > 0
+        ? `✓ Reclasificados ${updated} registros (${batch.length} videos consultados).${remaining > 0 ? ` Quedan ${remaining} para otra corrida.` : ""}`
+        : `Sin cambios: ${batch.length} videos consultados, ninguno musical.${remaining > 0 ? ` Quedan ${remaining} para otra corrida.` : ""}`,
+    );
+  } catch (err) {
+    showStatus(`Error al reclasificar: ${err.message}`, true);
+  } finally {
+    dom.enrichMusicBtn.disabled = false;
+    dom.enrichMusicBtn.textContent = orig;
   }
 });
 
@@ -1507,6 +1703,18 @@ async function init() {
   store.skips = Array.isArray(all.skips) ? all.skips : [];
   store.interactions = Array.isArray(all.interactions) ? all.interactions : [];
   store.searches = Array.isArray(all.searches) ? all.searches : [];
+
+  // --- FASE 3: migración única (guardada con clave de control) ---
+  if (!all.musicFlagMigratedV1) {
+    const changed = migrateMusicFlags(store);
+    const payload = { musicFlagMigratedV1: true };
+    if (changed) {
+      payload.history = store.history;
+      payload.skips = store.skips;
+      payload.interactions = store.interactions;
+    }
+    await chrome.storage.local.set(payload);
+  }
 
   npTabsMap.clear();
   const staleKeys = [];

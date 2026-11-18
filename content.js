@@ -10,6 +10,9 @@
     TICK_MS: 1000,
     MAX_SKIPS: 1000,
     MAX_SEARCHES: 2000,
+    // false = modo amplio (categoría Music incluye AMVs/lyrics/covers).
+    // true  = modo estricto (solo musicVideoType no-UGC o canal "- Topic").
+    MUSIC_STRICT: false,
   };
 
   const isMusic = location.hostname === "music.youtube.com";
@@ -46,6 +49,7 @@
 
   let saveQueue = Promise.resolve();
   const categoryCache = new Map();
+  const musicTypeCache = new Map();
   const fetchingCategories = new Set();
   const boundVideos = new WeakSet();
 
@@ -160,6 +164,24 @@
     return `https://www.youtube.com/watch?v=${videoId}`;
   }
 
+  // --- DETECCIÓN DE CONTENIDO MUSICAL (FASE 1) ---
+  // Canales auto-generados de artistas ("Artist - Topic" / "- Tema").
+  function isTopicChannel(name) {
+    return /[-–—]\s*(topic|tema)\s*$/i.test(String(name || "").trim());
+  }
+
+  // Modo amplio: categoría Music (incluye AMVs/lyrics/covers) ||
+  // musicVideoType presente || canal - Topic.
+  // Modo estricto: solo musicVideoType no-UGC || canal - Topic.
+  function detectIsMusicContent(category, musicVideoType, artist) {
+    if (isMusic) return true; // plataforma YT Music: música por definición
+    const topic = isTopicChannel(artist);
+    const officialType =
+      Boolean(musicVideoType) && !/UGC/i.test(musicVideoType);
+    if (CONFIG.MUSIC_STRICT) return officialType || topic;
+    return category === "Music" || Boolean(musicVideoType) || topic;
+  }
+
   function resolveVideoCategory(videoId) {
     if (isMusic) return "Music";
     if (!videoId) return "";
@@ -200,14 +222,33 @@
       })
         .then((r) => (r.ok ? r.text() : ""))
         .then((html) => {
-          const match = html.match(/"category"\s*:\s*"([^"]+)"/);
-          if (!match?.[1]) return;
-          const cat = match[1].replace(/\\u0026/g, "&");
-          categoryCache.set(videoId, cat);
-          if (state.session?.videoId === videoId) {
-            state.session.category = cat;
-            upsertSession(state.session, true);
+          if (!html) return;
+          const catMatch = html.match(/"category"\s*:\s*"([^"]+)"/);
+          const typeMatch = html.match(/"musicVideoType"\s*:\s*"([^"]+)"/);
+          const cat = catMatch?.[1]?.replace(/\\u0026/g, "&") || "";
+          const musicType = typeMatch?.[1] || "";
+          if (cat) categoryCache.set(videoId, cat);
+          if (musicType) musicTypeCache.set(videoId, musicType);
+
+          // Parche tardío: la sesión ya existe y se actualiza por id
+          // (upsert force), sin duplicar registros.
+          const s = state.session;
+          if (!s || s.videoId !== videoId) return;
+          let changed = false;
+          if (cat && s.category !== cat) {
+            s.category = cat;
+            changed = true;
           }
+          const nowMusic = detectIsMusicContent(
+            cat || s.category,
+            musicType,
+            s.artist,
+          );
+          if (nowMusic !== s.isMusic) {
+            s.isMusic = nowMusic;
+            changed = true;
+          }
+          if (changed) upsertSession(s, true);
         })
         .catch(() => {})
         .finally(() => fetchingCategories.delete(videoId));
@@ -306,6 +347,13 @@
       artwork = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
     }
 
+    const musicVideoType = musicTypeCache.get(videoId) || "";
+    const isMusicContent = detectIsMusicContent(
+      category,
+      musicVideoType,
+      artist,
+    );
+
     const trackKey = isMusic
       ? `ytm::${title.toLowerCase()}::${artist.toLowerCase()}`
       : `yt::${videoId}::${title.toLowerCase()}`;
@@ -318,6 +366,7 @@
       artist,
       album,
       category,
+      isMusic: isMusicContent,
       artwork,
       channelUrl,
       contentType,
@@ -445,6 +494,7 @@
             artist: info.artist,
             artwork: info.artwork,
             category: info.category || "",
+            isMusic: Boolean(info.isMusic),
             source,
             timestamp: Date.now(),
           });
@@ -671,6 +721,8 @@
       title: session.title,
       artist: session.artist,
       artwork: session.artwork,
+      category: session.category || "",
+      isMusic: Boolean(session.isMusic),
       source: session.source,
       contentType: session.contentType,
       seconds: Math.round(session.seconds),
@@ -718,6 +770,7 @@
       artist: session.artist,
       album: session.album || "",
       category: session.category || "",
+      isMusic: Boolean(session.isMusic),
       artwork: session.artwork,
       channelUrl: session.channelUrl || "",
       source: session.source,
@@ -779,6 +832,9 @@
           artist: info.artist,
           album: info.album || "",
           category: state.session?.category || info.category || "",
+          isMusic: Boolean(
+            state.session ? state.session.isMusic : info.isMusic,
+          ),
           artwork: info.artwork,
           videoUrl: info.videoUrl,
           source: info.source,
@@ -848,6 +904,7 @@
         s.artist = info.artist;
       if (info.album && !s.album) s.album = info.album;
       if (info.category && !s.category) s.category = info.category;
+      if (info.isMusic && !s.isMusic) s.isMusic = true;
       if (info.channelUrl && !s.channelUrl) s.channelUrl = info.channelUrl;
       if (info.artwork && !s.artwork) s.artwork = info.artwork;
       if (info.videoId && !s.videoId) {

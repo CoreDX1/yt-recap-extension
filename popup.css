@@ -286,8 +286,12 @@
   }
 
   footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-4);
     margin-top: var(--space-4);
-    text-align: center;
   }
 }
 
@@ -1786,6 +1790,27 @@
 
   .danger-link:hover {
     color: #f87171;
+  }
+
+  .footer-link {
+    background: none;
+    border: none;
+    color: var(--text-faint);
+    font-size: var(--fs-sm);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-sm);
+    min-height: 24px;
+    cursor: pointer;
+    transition: color var(--duration-fast) var(--ease-out);
+  }
+
+  .footer-link:hover {
+    color: var(--accent-sky);
+  }
+
+  .footer-link:disabled {
+    opacity: 0.6;
+    cursor: wait;
   }
 
   /* ---------- Animación de paneles ---------- */

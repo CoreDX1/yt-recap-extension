@@ -121,8 +121,8 @@
           </select>
           <select id="sourceSelect">
             <option value="all">Todo (YT + Music)</option>
-            <option value="yt_music">Solo YT Music</option>
-            <option value="youtube">Solo YouTube</option>
+            <option value="yt_music">Solo Música (YT Music + YouTube)</option>
+            <option value="youtube">YouTube (sin música)</option>
             <option value="no_shorts">Excluir Shorts</option>
             <option value="short">Solo Shorts</option>
             <option value="live">Solo Directos</option>
@@ -656,6 +656,9 @@
     </main>
 
     <footer>
+      <button id="enrichMusicBtn" type="button" class="footer-link">
+        Reclasificar música importada
+      </button>
       <button id="clearBtn" type="button" class="danger-link">
         Borrar historial local
       </button>
