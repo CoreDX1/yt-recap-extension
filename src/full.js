@@ -1,7 +1,4 @@
-// src/full.js — v2.5.1
-// PATCH B: mount síncrono de shelves visibles + persistencia de scrollLeft.
-// PATCH C: firmas struct/metrics, update in-place, debounce mayor, memo de VMs,
-//          gate de calendario y cleanup explícito en pagehide.
+// src/full.js — v2.7
 import {
   translateCategory,
   toDateKey,
@@ -37,10 +34,20 @@ import {
 import {
   summaryVM,
   activityVM,
-  channelsVM,
-  likesVM,
   homeVM,
   searchVM,
+  exploreInsightsVM,
+  formatsVM,
+  calendarHeroVM,
+  artistDirectoryVM,
+  artistDetailVM,
+  channelDirectoryVM,
+  channelDetailVM,
+  likesPageVM,
+  kpiMicroVM,
+  prevHoursVM,
+  yearHeatVM,
+  insightsVM,
 } from "./viewModels.js";
 import { renderCalendarView } from "./calendarView.js";
 import { icon, mountIcons } from "./icons.js";
@@ -49,7 +56,6 @@ import { createMonogram, attachImgFallback } from "./monogram.js";
 
 const $ = (id) => document.getElementById(id);
 const urlParams = new URLSearchParams(location.search);
-
 const PERIODS = [
   ["7", "7 días"],
   ["30", "30 días"],
@@ -62,6 +68,7 @@ const state = {
   scope:
     localStorage.getItem("recapFullScope") === "youtube" ? "youtube" : "music",
   route: "home",
+  detail: null,
   perScopeRoute: {
     music: localStorage.getItem("recapRouteMusic") || "home",
     youtube: localStorage.getItem("recapRouteYoutube") || "home",
@@ -76,21 +83,27 @@ const state = {
   searchIndex: -1,
   lastRoute: null,
   lastScope: null,
+  lastDetail: null,
   sigs: null,
+  peopleSort: localStorage.getItem("recapPeopleSort") || "time",
+  peopleMinSec: Number(localStorage.getItem("recapPeopleMin") || 0),
+  peopleQuery: "",
+  likesTab: localStorage.getItem("recapLikesTab") || "likes",
+  hoursMode: localStorage.getItem("recapHoursMode") || "bars",
+  showGhost: localStorage.getItem("recapGhost") !== "0",
+  animateNext: true,
 };
 
 const store = emptyStore();
 const npService = new NowPlaying();
 const observers = new Set();
-
-// PATCH B: posición horizontal de cada shelf, keyed por scope|ruta|período|título.
 const shelfScroll = new Map();
 const pendingShelves = [];
 const mountedRows = new Map();
-
-// PATCH C: memo de view-models por firma de datos.
 let memoSigKey = null;
 const memo = new Map();
+let ANIM = false;
+const countUps = new Set();
 
 const calUi = {
   calViewMode: "month",
@@ -132,6 +145,7 @@ const els = {
     likes: $("route-likes"),
     results: $("route-results"),
   },
+  calHero: $("calHero"),
   calHost: $("calHost"),
   pbSeek: $("pbSeek"),
   pbPrev: $("pbPrev"),
@@ -175,9 +189,9 @@ const els = {
 
 // ---------- helpers ----------
 const toastQueue = [];
-let toastBusy = false;
-let toastTimer = null;
-let toastGapTimer = null;
+let toastBusy = false,
+  toastTimer = null,
+  toastGapTimer = null;
 function toast(msg, isError = false) {
   toastQueue.push({ msg, isError });
   if (!toastBusy) nextToast();
@@ -198,12 +212,22 @@ function nextToast() {
     toastGapTimer = setTimeout(nextToast, 160);
   }, 3200);
 }
-
+const reduceMotion = () =>
+  matchMedia("(prefers-reduced-motion: reduce)").matches;
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
 function scopeValue() {
   return state.scope === "music" ? "yt_music" : "youtube";
 }
 function scopeName() {
   return state.scope === "music" ? "Music" : "YouTube sin música";
+}
+function isMusicScope() {
+  return state.scope === "music";
 }
 function periodPlays() {
   return store.history.filter((it) =>
@@ -223,6 +247,18 @@ function meta(items) {
 function metaAll(items) {
   return items.filter((it) =>
     matchesPeriodAndSourceOnly(it, "all", scopeValue(), false),
+  );
+}
+function prevPeriodPlays() {
+  if (state.period === "all") return [];
+  const days = Number(state.period),
+    now = Date.now(),
+    from = now - days * 86400000;
+  return store.history.filter(
+    (it) =>
+      matchesFilter(it, "all", scopeValue(), false) &&
+      it.timestamp >= from - days * 86400000 &&
+      it.timestamp < from,
   );
 }
 function periodLabel() {
@@ -261,9 +297,9 @@ async function sendControl(action, value, tabId = state.currentTabId) {
 function dedupeSessions(items) {
   const map = new Map();
   for (const it of items) {
-    const key = getGroupKey(it);
-    const cur = map.get(key);
-    if (!cur || it.timestamp > cur.timestamp) map.set(key, it);
+    const k = getGroupKey(it);
+    const cur = map.get(k);
+    if (!cur || it.timestamp > cur.timestamp) map.set(k, it);
   }
   return [...map.values()].sort((a, b) => b.timestamp - a.timestamp);
 }
@@ -282,10 +318,8 @@ function highlight(text, q) {
     return frag;
   }
   frag.append(text.slice(0, idx));
-  const mark = document.createElement("mark");
-  mark.textContent = text.slice(idx, idx + q.length);
-  frag.append(mark);
-  frag.append(text.slice(idx + q.length));
+  const mark = el("mark", null, text.slice(idx, idx + q.length));
+  frag.append(mark, text.slice(idx + q.length));
   return frag;
 }
 function hashStr(s) {
@@ -293,34 +327,59 @@ function hashStr(s) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return h;
 }
+function playIds(ids, label) {
+  const clean = [...new Set(ids.filter(Boolean))].slice(0, 50);
+  if (!clean.length) {
+    toast(`No hay videos con ID para armar la playlist de ${label}.`);
+    return;
+  }
+  openInstantPlaylist(clean);
+}
+function cancelCountUps() {
+  for (const id of countUps) cancelAnimationFrame(id);
+  countUps.clear();
+}
+function countUp(node, to, fmt) {
+  if (!ANIM) {
+    node.textContent = fmt(to);
+    return;
+  }
+  const dur = 680,
+    t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur);
+    const e = 1 - Math.pow(1 - k, 3);
+    node.textContent = fmt(Math.round(to * e));
+    if (k < 1) {
+      const id = requestAnimationFrame(step);
+      countUps.add(id);
+    }
+  };
+  const id = requestAnimationFrame(step);
+  countUps.add(id);
+}
 
-// ---------- PATCH C: firmas de datos ----------
+// ---------- firmas + memo ----------
 function computeSigs() {
-  const plays = periodPlays();
-  const inter = meta(store.interactions);
-  const searches = meta(store.searches);
-  const visits = meta(store.channelVisits);
-
+  const plays = periodPlays(),
+    inter = meta(store.interactions),
+    searches = meta(store.searches),
+    visits = meta(store.channelVisits);
   let sh = 0;
-  for (const p of plays) {
+  for (const p of plays)
     sh =
       (sh * 31 +
         hashStr(
           `${p.trackKey}|${p.title}|${p.artist}|${p.contentType}|${p.category}|${p.isMusic ? 1 : 0}`,
         )) |
       0;
-  }
   let ih = 0;
   for (const it of inter) ih = (ih * 31 + hashStr(it.id + it.type)) | 0;
   let se = 0;
   for (const s of searches) se = (se * 31 + hashStr(s.id)) | 0;
   let vi = 0;
   for (const v of visits) vi = (vi * 31 + hashStr(v.id)) | 0;
-
-  let struct = `${state.scope}|${state.route}|${state.period}|${plays.length}|${sh}|${inter.length}|${ih}|${searches.length}|${se}|${visits.length}|${vi}`;
-
-  // Calendario: solo re-render si cambia la estructura o el bucket de heat,
-  // no en cada tick de segundos.
+  let struct = `${state.scope}|${state.route}|${state.detail || ""}|${state.period}|${state.peopleSort}|${state.peopleMinSec}|${state.peopleQuery}|${state.likesTab}|${state.hoursMode}|${state.showGhost}|${plays.length}|${sh}|${inter.length}|${ih}|${searches.length}|${se}|${visits.length}|${vi}`;
   if (state.route === "calendar") {
     const buckets = new Map();
     const touch = (k) => {
@@ -337,28 +396,30 @@ function computeSigs() {
     for (const s of metaAll(store.searches))
       touch(toDateKey(new Date(s.timestamp)));
     let hh = 0;
-    const keys = [...buckets.keys()].sort();
-    for (const k of keys) {
+    for (const k of [...buckets.keys()].sort()) {
       const sec = buckets.get(k).sec;
-      const level = sec >= 7200 ? 4 : sec >= 2700 ? 3 : sec >= 900 ? 2 : 1;
-      hh = (hh * 31 + hashStr(`${k}:${level}`)) | 0;
+      hh =
+        (hh * 31 +
+          hashStr(
+            `${k}:${sec >= 7200 ? 4 : sec >= 2700 ? 3 : sec >= 900 ? 2 : 1}`,
+          )) |
+        0;
     }
-    struct += `|cal${hh}`;
+    struct += `|cal${hh}|${calUi.calYear}|${calUi.calMonth}|${calUi.calViewMode}|${calUi.selectedDateKey}|${calUi.calDayMode}|${calUi.calSearchQuery}`;
   }
-
-  let totalSeconds = 0;
-  let loops = 0;
+  let totalSeconds = 0,
+    loops = 0;
   const hours = new Array(24).fill(0);
   for (const p of plays) {
     totalSeconds += p.seconds || 0;
     if (p.isLoop) loops += 1;
     hours[new Date(p.timestamp).getHours()] += p.seconds || 0;
   }
-  const peak = hours.indexOf(Math.max(...hours));
-  const metrics = `${totalSeconds}|${loops}|${peak}`;
-  return { struct, metrics };
+  return {
+    struct,
+    metrics: `${totalSeconds}|${loops}|${hours.indexOf(Math.max(...hours))}`,
+  };
 }
-
 function memoVM(tag, fn) {
   const sigKey = `${state.sigs?.struct}|${state.sigs?.metrics}`;
   if (memoSigKey !== sigKey) {
@@ -390,23 +451,58 @@ const vmActivity = () =>
       ),
     ),
   );
-const vmLikes = () =>
-  memoVM("likes", () =>
-    likesVM(meta(store.interactions), meta(store.searches)),
+const vmInsights = () =>
+  memoVM("insights", () => exploreInsightsVM(periodPlays(), prevPeriodPlays()));
+const vmMicro = () =>
+  memoVM("micro", () => kpiMicroVM(periodPlays(), prevPeriodPlays()));
+const vmPrevHours = () =>
+  memoVM("prevHours", () => prevHoursVM(prevPeriodPlays()));
+const vmNarrative = () =>
+  memoVM("narrative", () => insightsVM(periodPlays(), prevPeriodPlays()));
+const vmFormats = () => memoVM("formats", () => formatsVM(periodPlays()));
+const vmLikesPage = () =>
+  memoVM("likesPage", () =>
+    likesPageVM(meta(store.interactions), meta(store.searches), periodPlays()),
   );
-const vmChannels = (sort, min) =>
-  memoVM(`channels:${sort}:${min}`, () =>
-    channelsVM(meta(store.channelVisits), periodPlays(), sort, min),
+const vmDirectory = () =>
+  memoVM("directory", () =>
+    isMusicScope()
+      ? artistDirectoryVM(
+          periodPlays(),
+          meta(store.interactions),
+          state.peopleSort,
+          state.peopleQuery,
+        )
+      : channelDirectoryVM(
+          periodPlays(),
+          meta(store.channelVisits),
+          state.peopleSort,
+          state.peopleMinSec,
+          state.peopleQuery,
+        ),
+  );
+const vmCalHero = () =>
+  memoVM(`calHero:${calUi.calYear}`, () =>
+    calendarHeroVM(
+      allPlays(),
+      metaAll(store.interactions),
+      metaAll(store.searches),
+      calUi.calYear,
+    ),
+  );
+const vmYearHeat = () =>
+  memoVM(`yearHeat:${calUi.calYear}`, () =>
+    yearHeatVM(allPlays(), calUi.calYear),
   );
 
 // ---------- tooltip ----------
 function showTip(text, x, y) {
   els.chartTip.textContent = text;
   els.chartTip.hidden = false;
-  const pad = 14;
-  const r = els.chartTip.getBoundingClientRect();
-  let left = x + pad;
-  let top = y + pad;
+  const pad = 14,
+    r = els.chartTip.getBoundingClientRect();
+  let left = x + pad,
+    top = y + pad;
   if (left + r.width > innerWidth - 8) left = x - r.width - pad;
   if (top + r.height > innerHeight - 8) top = y - r.height - pad;
   els.chartTip.style.left = `${Math.max(8, left)}px`;
@@ -415,31 +511,34 @@ function showTip(text, x, y) {
 function hideTip() {
   els.chartTip.hidden = true;
 }
-function tipify(el, textFn) {
-  el.addEventListener("mousemove", (e) =>
+function tipify(node, textFn) {
+  node.addEventListener("mousemove", (e) =>
     showTip(textFn(), e.clientX, e.clientY),
   );
-  el.addEventListener("mouseleave", hideTip);
+  node.addEventListener("mouseleave", hideTip);
 }
 
 // ---------- router ----------
 function parseHash() {
-  const m = location.hash.match(/^#\/(music|youtube)\/([a-z]+)/);
+  const m = location.hash.match(/^#\/(music|youtube)\/([a-z]+)(?:\/(.+))?$/);
   if (m) {
     state.scope = m[1];
     state.route = els.routes[m[2]] ? m[2] : "home";
+    state.detail = m[3] ? decodeURIComponent(m[3]) : null;
   }
 }
-function navigate(scope, route) {
+function navigate(scope, route, detail = null) {
   state.scope = scope;
   state.route = route;
+  state.detail = detail;
   state.perScopeRoute[scope] = route;
+  state.animateNext = true;
   localStorage.setItem("recapFullScope", scope);
   localStorage.setItem(
     scope === "music" ? "recapRouteMusic" : "recapRouteYoutube",
     route,
   );
-  const hash = `#/${scope}/${route}`;
+  const hash = `#/${scope}/${route}${detail ? `/${encodeURIComponent(detail)}` : ""}`;
   if (location.hash !== hash) location.hash = hash;
   else renderAll();
 }
@@ -448,28 +547,676 @@ window.addEventListener("hashchange", () => {
   renderAll();
 });
 
+// ---------- micro visuales ----------
+function sparkArea(values, { w = 320, h = 92, id = "sa" } = {}) {
+  const max = Math.max(...values, 1);
+  const pts = values.map(
+    (v, i) =>
+      `${((i / Math.max(1, values.length - 1)) * w).toFixed(1)},${(h - (v / max) * (h - 10) - 4).toFixed(1)}`,
+  );
+  const last = pts[pts.length - 1].split(",");
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent-red)" stop-opacity=".5"/><stop offset="100%" stop-color="var(--accent-red)" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="M0,${h} L${pts.join(" L")} L${w},${h} Z" fill="url(#${id})"/>
+    <polyline points="${pts.join(" ")}" fill="none" stroke="var(--accent-pink)" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${last[0]}" cy="${last[1]}" r="3.5" fill="var(--accent-pink)"/>
+  </svg>`;
+}
+function microBars(values) {
+  const max = Math.max(...values, 1);
+  const box = el("div", "micro-bars");
+  for (const v of values) {
+    const i = el("i", v > 0 ? "" : "zero");
+    i.style.height = `${Math.max(6, (v / max) * 100)}%`;
+    box.append(i);
+  }
+  return box;
+}
+function microDots(days7) {
+  const box = el("div", "micro-dots");
+  for (const d of days7) box.append(el("i", d.active ? "on" : ""));
+  return box;
+}
+function microTicks(hours) {
+  const max = Math.max(...hours, 1);
+  const peak = hours.indexOf(max);
+  const box = el("div", "micro-ticks");
+  hours.forEach((v, i) => {
+    const t = el("i", i === peak && v > 0 ? "peak" : "");
+    t.style.height = `${Math.max(6, (v / max) * 100)}%`;
+    box.append(t);
+  });
+  return box;
+}
+function microRatio(ratio) {
+  const box = el("div", "micro-ratio");
+  const fill = el("i");
+  fill.style.width = `${Math.round(Math.min(1, ratio) * 100)}%`;
+  box.append(fill);
+  return box;
+}
+function microRing(ratio) {
+  const r = 12,
+    c = 2 * Math.PI * r,
+    len = Math.min(1, ratio) * c;
+  const box = el("div", "micro-ring");
+  box.innerHTML = `<svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="${r}" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="4"/>
+    <circle cx="15" cy="15" r="${r}" fill="none" stroke="var(--accent-pink)" stroke-width="4" stroke-linecap="round"
+      stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" transform="rotate(-90 15 15)"/></svg>`;
+  return box;
+}
+
+// ---------- componentes ----------
+function kpiCard({
+  key,
+  iconName,
+  label,
+  value,
+  delta,
+  note,
+  micro,
+  countTo,
+  fmt,
+}) {
+  const card = el("div", "kpi-card");
+  if (key) card.dataset.kpi = key;
+  const top = el("div", "kpi-top");
+  const ico = el("span", "kpi-ico");
+  ico.innerHTML = icon(iconName, 15);
+  top.append(ico, el("span", "kpi-label", label));
+  const val = el("strong", "kpi-value", value);
+  card.append(top, val);
+  if (countTo != null && fmt) countUp(val, countTo, fmt);
+  if (micro) {
+    const m = el("div", "kpi-micro");
+    m.append(micro);
+    card.append(m);
+  }
+  const foot = el("div", "kpi-foot");
+  if (delta != null) {
+    const cls = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+    foot.append(
+      el(
+        "span",
+        `kpi-delta ${cls}`,
+        `${delta > 0 ? "▲" : delta < 0 ? "▼" : "■"} ${Math.abs(delta)}%`,
+      ),
+      el("span", "kpi-note", "vs período anterior"),
+    );
+  } else if (note) foot.append(el("span", "kpi-note", note));
+  if (foot.childNodes.length) card.append(foot);
+  return card;
+}
+function kpiStrip(cards, cols) {
+  const s = el("div", `kpi-strip${cols ? ` cols-${cols}` : ""}`);
+  s.append(...cards);
+  return s;
+}
+
+function pageHero({
+  eyebrow,
+  title,
+  desc,
+  cover,
+  visual,
+  actions,
+  kpis,
+  insight,
+}) {
+  const hero = el("section", `page-hero${visual ? " has-visual" : ""}`);
+  const left = el("div", "hero-left");
+  if (cover) left.append(cover);
+  const text = el("div", "hero-text");
+  if (eyebrow) text.append(el("span", "hero-eyebrow", eyebrow));
+  const h = el("h2", "hero-title route-title", title);
+  h.tabIndex = -1;
+  text.append(h);
+  if (desc) text.append(el("div", "hero-desc", desc));
+  if (actions?.length) {
+    const row = el("div", "hero-actions");
+    row.append(...actions);
+    text.append(row);
+  }
+  left.append(text);
+  hero.append(left);
+  if (visual) hero.append(visual);
+  const frag = document.createDocumentFragment();
+  frag.append(hero);
+  if (insight) {
+    const chip = el("div", "insight-chip");
+    const i = el("span");
+    i.innerHTML = icon(insight.icon || "bulb", 16);
+    const t = el("span");
+    t.innerHTML = insight.text;
+    chip.append(i, t);
+    frag.append(chip);
+  }
+  if (kpis?.length)
+    frag.append(kpiStrip(kpis, kpis.length <= 4 ? kpis.length : null));
+  return frag;
+}
+function primaryBtn(label, iconName, onClick) {
+  const b = el("button", "btn-primary");
+  b.type = "button";
+  b.innerHTML = icon(iconName, 16);
+  b.append(` ${label}`);
+  b.addEventListener("click", onClick);
+  return b;
+}
+function ghostBtn(label, iconName, onClick) {
+  const b = el("button", "btn-ghost");
+  b.type = "button";
+  if (iconName) b.innerHTML = icon(iconName, 15);
+  b.append(iconName ? ` ${label}` : label);
+  b.addEventListener("click", onClick);
+  return b;
+}
+function panel({ title, sub, tools, span = 12, body, iconName }) {
+  const p = el("section", `panel span-${span}`);
+  const head = el("div", "panel-head");
+  if (iconName) {
+    const i = el("span", "panel-ico");
+    i.innerHTML = icon(iconName, 15);
+    head.append(i);
+  }
+  head.append(el("h3", "panel-title", title));
+  if (sub) head.append(el("span", "panel-sub", sub));
+  if (tools?.length) {
+    const t = el("div", "panel-tools");
+    t.append(...tools);
+    head.append(t);
+  }
+  p.append(head);
+  const b = el("div", "panel-body");
+  if (body) b.append(body);
+  p.append(b);
+  p._body = b;
+  return p;
+}
+function pillRow(items, active, onPick, ariaLabel) {
+  const row = el("div", "pill-row");
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", ariaLabel || "Filtros");
+  for (const it of items) {
+    const b = el("button", `pill${it.value === active ? " active" : ""}`);
+    b.type = "button";
+    b.dataset.value = String(it.value);
+    b.setAttribute("aria-pressed", String(it.value === active));
+    if (it.icon) b.innerHTML = icon(it.icon, 13);
+    b.append(it.icon ? ` ${it.label}` : it.label);
+    b.addEventListener("click", () => onPick(it.value, b, row));
+    row.append(b);
+  }
+  return row;
+}
+function setPills(row, value) {
+  [...row.children].forEach((b) => {
+    const on = b.dataset.value === String(value);
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+}
+function tinyToggle(label, iconName, on, onClick) {
+  const b = el("button", `pill tiny${on ? " active" : ""}`);
+  b.type = "button";
+  b.setAttribute("aria-pressed", String(on));
+  b.innerHTML = icon(iconName, 12);
+  b.append(` ${label}`);
+  b.addEventListener("click", onClick);
+  return b;
+}
+function emptyState(iconName, msg, action) {
+  const box = el("div", "empty-cta");
+  const i = el("span");
+  i.innerHTML = icon(iconName, 26);
+  box.append(i, el("p", null, msg));
+  if (action) box.append(action);
+  return box;
+}
+
+function donutChart(segments) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  const wrap = el("div", "donut-wrap");
+  if (!total) {
+    wrap.append(
+      emptyState(
+        "chart",
+        "Todavía no hay reproducciones en este período para graficar formatos.",
+      ),
+    );
+    return wrap;
+  }
+  const r = 62,
+    c = 2 * Math.PI * r;
+  let offset = 0;
+  const rings = segments
+    .map((s, i) => {
+      const len = (s.value / total) * c;
+      const out = `<circle class="seg" data-i="${i}" cx="84" cy="84" r="${r}" fill="none" stroke="${s.color}" stroke-width="19" stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 84 84)"><title>${s.label}: ${s.value}</title></circle>`;
+      offset += len;
+      return out;
+    })
+    .join("");
+  const holder = el("div");
+  holder.innerHTML = `<svg class="donut" viewBox="0 0 168 168" role="img" aria-label="Distribución de formatos"><circle cx="84" cy="84" r="${r}" fill="none" stroke="var(--surface-inset)" stroke-width="19"/>${rings}<text class="donut-total" x="84" y="80" text-anchor="middle">${total}</text><text class="donut-cap" x="84" y="99" text-anchor="middle">reprod.</text></svg>`;
+  const svg = holder.firstChild;
+  wrap.append(svg);
+  const legend = el("div", "donut-legend");
+  const rows = segments.map((s, i) => {
+    const row = el("div", "legend-row");
+    row.dataset.i = String(i);
+    const dot = el("span", "legend-dot");
+    dot.style.background = s.color;
+    row.append(
+      dot,
+      el("span", "legend-label", s.label),
+      el("span", "legend-val", String(s.value)),
+      el("span", "legend-pct", `${Math.round((s.value / total) * 100)}%`),
+    );
+    legend.append(row);
+    return row;
+  });
+  const hot = (i) => {
+    svg.classList.toggle("dim", i != null);
+    svg
+      .querySelectorAll(".seg")
+      .forEach((s) => s.classList.toggle("hot", s.dataset.i === String(i)));
+    rows.forEach((r2) =>
+      r2.classList.toggle("hot", r2.dataset.i === String(i)),
+    );
+  };
+  svg.querySelectorAll(".seg").forEach((s) => {
+    s.addEventListener("mouseenter", () => hot(s.dataset.i));
+    s.addEventListener("mouseleave", () => hot(null));
+  });
+  rows.forEach((r2) => {
+    r2.addEventListener("mouseenter", () => hot(r2.dataset.i));
+    r2.addEventListener("mouseleave", () => hot(null));
+  });
+  wrap.append(legend);
+  return wrap;
+}
+
+function barChart({
+  values,
+  prev,
+  labels,
+  fullLabels,
+  mode = "bars",
+  ghost = false,
+  selected = null,
+  onPick,
+  night = () => false,
+  noun = "",
+}) {
+  const max = Math.max(...values, ...(ghost && prev ? prev : [0]), 1);
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  const peakIdx = values.indexOf(Math.max(...values));
+  const wrap = el("div", `hx${ANIM ? " anim" : ""}`);
+  const axis = el("div", "hx-axis");
+  for (const f of [1, 0.5, 0])
+    axis.append(el("span", null, formatDuration(Math.round(max * f))));
+  wrap.append(axis);
+  const plot = el("div", "hx-plot");
+  for (const f of [0, 0.5, 1]) {
+    const g = el("div", "hx-grid");
+    g.style.bottom = `${f * 100}%`;
+    plot.append(g);
+  }
+  if (avg > 0) {
+    const a = el("div", "hx-avg");
+    a.style.bottom = `${(avg / max) * 100}%`;
+    a.append(
+      el("span", "hx-avg-lbl", `prom. ${formatDuration(Math.round(avg))}`),
+    );
+    plot.append(a);
+  }
+  const bars = el("div", `hx-bars${mode === "area" ? " as-hit" : ""}`);
+  values.forEach((sec, i) => {
+    const cell = el(
+      "div",
+      `hx-cell${night(i) ? " night" : ""}${i === peakIdx && sec > 0 ? " peak" : ""}${selected === i ? " selected" : ""}`,
+    );
+    if (ghost && prev && prev[i] > 0) {
+      const g = el("div", "hx-ghost");
+      g.style.height = `${(prev[i] / max) * 100}%`;
+      cell.append(g);
+    }
+    const bar = el("div", `hx-bar${sec === 0 ? " zero" : ""}`);
+    bar.style.height = `${Math.max(2, (sec / max) * 100)}%`;
+    cell.append(
+      bar,
+      el("span", "hx-val", `${fullLabels[i]} · ${formatDuration(sec)}`),
+    );
+    cell.tabIndex = 0;
+    cell.setAttribute("role", "button");
+    cell.setAttribute(
+      "aria-label",
+      `${fullLabels[i]} — ${formatDuration(sec)}${noun ? ` ${noun}` : ""}`,
+    );
+    const pick = () => onPick?.(i);
+    cell.addEventListener("click", pick);
+    cell.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    cell.addEventListener("mousemove", (e) =>
+      showTip(
+        `${fullLabels[i]} — ${formatDuration(sec)}${ghost && prev ? ` · antes ${formatDuration(prev[i])}` : ""}`,
+        e.clientX,
+        e.clientY,
+      ),
+    );
+    cell.addEventListener("mouseleave", hideTip);
+    bars.append(cell);
+  });
+  plot.append(bars);
+  if (mode === "area") {
+    const w = 1000,
+      h = 200;
+    const pts = values.map(
+      (s, i) =>
+        `${((i / Math.max(1, values.length - 1)) * w).toFixed(1)},${(h - (s / max) * h).toFixed(1)}`,
+    );
+    const holder = el("div", "hx-area");
+    holder.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="hxa" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent-red)" stop-opacity=".55"/><stop offset="100%" stop-color="var(--accent-red)" stop-opacity="0"/></linearGradient></defs><path d="M0,${h} L${pts.join(" L")} L${w},${h} Z" fill="url(#hxa)"/><polyline points="${pts.join(" ")}" fill="none" stroke="var(--accent-pink)" stroke-width="3" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+    plot.append(holder.firstChild);
+  }
+  if (values[peakIdx] > 0) {
+    const ann = el("div", "hx-peak");
+    ann.style.left = `${((peakIdx + 0.5) / values.length) * 100}%`;
+    ann.innerHTML = icon("trophy", 12);
+    ann.append(` ${fullLabels[peakIdx]} · ${formatDuration(values[peakIdx])}`);
+    plot.append(ann);
+  }
+  wrap.append(plot);
+  const lbl = el("div", "hx-labels");
+  for (const t of labels) lbl.append(el("span", null, t));
+  wrap.append(lbl);
+  return wrap;
+}
+
+function insightsPanel(items) {
+  const p = panel({
+    iconName: "bulb",
+    title: "Insights",
+    sub: "lecturas de tu propio historial",
+    span: 12,
+  });
+  if (!items.length) {
+    p._body.append(
+      emptyState(
+        "bulb",
+        "Todavía no hay suficiente actividad para generar lecturas.",
+      ),
+    );
+    return p;
+  }
+  const list = el("div", "insights");
+  for (const it of items) {
+    const actionable = it.action && it.action.type !== "none";
+    const b = el("button", `insight tone-${it.tone}`);
+    b.type = "button";
+    const i = el("span", "insight-ico");
+    i.innerHTML = icon(it.icon, 16);
+    const t = el("span", "insight-text");
+    t.innerHTML = it.text;
+    b.append(i, t);
+    if (actionable) {
+      const go = el("span", "insight-go");
+      go.innerHTML = icon("chevronRight", 14);
+      b.append(go);
+      b.addEventListener("click", () => runInsight(it.action));
+    } else b.disabled = true;
+    list.append(b);
+  }
+  p._body.append(list);
+  return p;
+}
+function runInsight(a) {
+  if (a.type === "calendar") {
+    if (a.y != null) {
+      calUi.calYear = a.y;
+      calUi.calMonth = a.m;
+      calUi.selectedDateKey = toDateKey(new Date(a.y, a.m, a.d));
+      calUi.calViewMode = "month";
+    }
+    navigate(state.scope, "calendar");
+  } else if (a.type === "hour") {
+    state.hourFilter = a.h;
+    navigate(state.scope, "explore");
+  } else if (a.type === "people") navigate(state.scope, "people", a.name);
+}
+
+function rankRow({
+  rank,
+  thumb,
+  round,
+  name,
+  sub,
+  value,
+  pct,
+  tag,
+  href,
+  onOpen,
+  medal,
+}) {
+  const row = el("button", `pt-row${pct == null ? " no-bar" : ""}`);
+  row.type = "button";
+  row.append(el("span", `pt-rank${medal ? ` g${medal}` : ""}`, String(rank)));
+  let img;
+  if (thumb) {
+    img = el("img", `pt-thumb${round ? " round" : ""}`);
+    img.src = thumb;
+    img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    attachImgFallback(img, name);
+  } else {
+    img = el("span", `pt-thumb${round ? " round" : ""}`);
+    const mono = createMonogram(name);
+    mono.style.fontSize = "15px";
+    img.append(mono);
+  }
+  const metaBox = el("div", "pt-meta");
+  const t = el("div", "pt-title", name);
+  if (tag) t.append(el("span", "pt-tag", tag));
+  metaBox.append(t, el("div", "pt-sub", sub || ""));
+  row.append(img, metaBox);
+  if (pct != null) {
+    const bar = el("div", "pt-bar");
+    const fill = el("div", "pt-bar-fill");
+    fill.style.width = `${Math.max(2, Math.min(100, pct))}%`;
+    bar.append(fill);
+    row.append(bar);
+  }
+  row.append(el("span", "pt-value", value));
+  row.title = name;
+  row.addEventListener("click", () => {
+    if (onOpen) onOpen();
+    else openUrl(href);
+  });
+  return row;
+}
+function personTile({ name, artwork, meta: m, sub, onOpen, onPlay }) {
+  const card = el("button", "person-card");
+  card.type = "button";
+  const av = el("div", "person-avatar");
+  if (artwork) {
+    const img = el("img");
+    img.src = artwork;
+    img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    attachImgFallback(img, name);
+    av.append(img);
+  } else av.append(createMonogram(name));
+  if (onPlay) {
+    const p = el("span", "person-play");
+    p.innerHTML = icon("play", 15);
+    p.setAttribute("aria-hidden", "true");
+    av.append(p);
+  }
+  card.append(av, el("div", "person-name", name));
+  if (m) card.append(el("div", "person-meta", m));
+  if (sub) card.append(el("div", "person-sub", sub));
+  card.title = name;
+  card.addEventListener("click", (e) => {
+    if (onPlay && e.target.closest(".person-play")) {
+      onPlay();
+      return;
+    }
+    onOpen();
+  });
+  return card;
+}
+function directoryGrid(items, makeTile, batch = 24) {
+  const wrap = el("div");
+  const grid = el("div", "directory-grid");
+  let shown = 0;
+  const more = el("button", "grid-more");
+  more.type = "button";
+  const paint = () => {
+    const next = items.slice(shown, shown + batch);
+    grid.append(...next.map(makeTile));
+    shown += next.length;
+    if (shown >= items.length) more.remove();
+    else more.textContent = `Mostrar más (${items.length - shown})`;
+  };
+  more.addEventListener("click", paint);
+  paint();
+  wrap.append(grid);
+  if (shown < items.length) wrap.append(more);
+  return wrap;
+}
+
+// ---------- hero visuals ----------
+function heroVisualExplore() {
+  const ins = vmInsights(),
+    sum = ins.sum;
+  const v = el("button", "hero-visual");
+  v.type = "button";
+  const total = el("div", "hv-total");
+  total.append(
+    el("strong", null, sum.empty ? "0 min" : formatDuration(sum.totalSeconds)),
+    el("span", null, "últimos 14 días"),
+  );
+  const chart = el("div", "hv-chart");
+  chart.innerHTML = sparkArea(ins.trend, { id: "hvsa" });
+  const covers = el("div", "hv-covers");
+  for (const t of sum.empty ? [] : sum.topTracks.slice(0, 4)) {
+    if (t.artwork) {
+      const img = el("img");
+      img.src = t.artwork;
+      img.alt = "";
+      img.loading = "lazy";
+      attachImgFallback(img, t.artist);
+      covers.append(img);
+    } else {
+      const mo = createMonogram(t.artist || t.title);
+      covers.append(mo);
+    }
+  }
+  v.append(total, chart, covers);
+  v.title = "Ver el mes más fuerte en el calendario";
+  v.addEventListener("click", () => {
+    const best = vmHome()
+      .months.filter((m) => m.plays > 0)
+      .sort((a, b) => b.seconds - a.seconds)[0];
+    if (best) {
+      calUi.calYear = best.y;
+      calUi.calMonth = best.m;
+      calUi.selectedDateKey = toDateKey(new Date(best.y, best.m, 1));
+      calUi.calViewMode = "month";
+    }
+    navigate(state.scope, "calendar");
+  });
+  return v;
+}
+function heroVisualCalendar() {
+  const heat = vmYearHeat();
+  const v = el("button", "hero-visual hv-heat");
+  v.type = "button";
+  const cols = Math.ceil(heat.cells.length / 7);
+  const size = 7,
+    gap = 2,
+    w = cols * (size + gap),
+    h = 7 * (size + gap);
+  const colors = [
+    "var(--surface-inset)",
+    "#15803d",
+    "#16a34a",
+    "#22c55e",
+    "#4ade80",
+  ];
+  const rects = heat.cells
+    .map((c, i) => {
+      if (!c) return "";
+      const col = Math.floor(i / 7),
+        row = i % 7;
+      return `<rect x="${col * (size + gap)}" y="${row * (size + gap)}" width="${size}" height="${size}" rx="1.5" fill="${colors[c.level]}"><title>${c.key}</title></rect>`;
+    })
+    .join("");
+  const holder = el("div");
+  holder.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Mapa de calor del año">${rects}</svg>`;
+  const cap = el("div", "hv-heat-cap");
+  cap.append(
+    el("span", null, `${calUi.calYear}`),
+    el("span", null, `${formatDuration(heat.total)} · clic para vista anual`),
+  );
+  v.append(holder.firstChild, cap);
+  v.addEventListener("click", () => {
+    calUi.calViewMode = "year";
+    syncCalModeButtons();
+    state.sigs = computeSigs();
+    renderCalendarRoute();
+  });
+  return v;
+}
+function heroVisualPeople(list) {
+  const v = el("div", "hero-visual");
+  const cap = el("div", "hv-heat-cap");
+  cap.append(
+    el("span", null, isMusicScope() ? "Tus artistas" : "Tus canales"),
+    el("span", null, `${list.length} en el período`),
+  );
+  const grid = el("div", "hv-collage");
+  for (const a of list.slice(0, 6)) {
+    const cell = el("div", "hv-av");
+    const art = a.artwork || a.avatar;
+    if (art) {
+      const img = el("img");
+      img.src = art;
+      img.alt = "";
+      img.loading = "lazy";
+      attachImgFallback(img, a.name);
+      cell.append(img);
+    } else cell.append(createMonogram(a.name));
+    grid.append(cell);
+  }
+  v.append(cap, grid);
+  return v;
+}
+
 // ---------- shell ----------
 function renderInlineStats(sum) {
   els.inlineStats.replaceChildren();
   if (!sum.empty) {
-    const strong = (t) => {
-      const s = document.createElement("strong");
-      s.textContent = t;
-      return s;
-    };
+    const s = (t) => el("strong", null, t);
     els.inlineStats.append(
-      strong(String(sum.totalPlays)),
+      s(String(sum.totalPlays)),
       " rep · ",
-      strong(formatDuration(sum.totalSeconds)),
+      s(formatDuration(sum.totalSeconds)),
       " · ",
-      strong(String(sum.unique)),
+      s(String(sum.unique)),
       " únicos",
     );
-  } else {
-    els.inlineStats.textContent = "Sin datos en este período";
-  }
+  } else els.inlineStats.textContent = "Sin datos en este período";
 }
-
 function renderShell() {
   document.body.dataset.scope = state.scope;
   document.title =
@@ -494,12 +1241,15 @@ function renderShell() {
   });
   els.periodChips.replaceChildren(
     ...PERIODS.map(([value, label]) => {
-      const b = document.createElement("button");
+      const b = el(
+        "button",
+        `period-chip${state.period === value ? " active" : ""}`,
+        label,
+      );
       b.type = "button";
-      b.className = "period-chip" + (state.period === value ? " active" : "");
-      b.textContent = label;
       b.addEventListener("click", () => {
         state.period = value;
+        state.animateNext = true;
         localStorage.setItem("recapFullPeriod", value);
         renderAll();
       });
@@ -509,34 +1259,35 @@ function renderShell() {
   renderInlineStats(vmSummary());
   renderSideLists();
 }
-
 function renderSideLists() {
-  const vm = vmHome();
-  const nodes = [];
+  const vm = vmHome(),
+    nodes = [];
   const liked = meta(store.interactions).filter((it) => it.type === "like");
-  const likedBtn = document.createElement("button");
+  const likedBtn = el("button", "side-list");
   likedBtn.type = "button";
-  likedBtn.className = "side-list";
-  const lt = document.createElement("strong");
+  const lt = el("strong");
   lt.innerHTML = icon("heartFill", 12);
-  lt.append(state.scope === "music" ? " Liked Music" : " Me gusta (videos)");
-  const ls = document.createElement("span");
-  ls.textContent = `${liked.length} me gusta · lista generada`;
-  likedBtn.append(lt, ls);
+  lt.append(isMusicScope() ? " Liked Music" : " Me gusta (videos)");
+  likedBtn.append(
+    lt,
+    el("span", null, `${liked.length} me gusta · lista generada`),
+  );
   likedBtn.addEventListener("click", () => navigate(state.scope, "likes"));
   nodes.push(likedBtn);
-
   for (const m of vm.months.slice(0, 8)) {
-    if (m.plays === 0) continue;
-    const b = document.createElement("button");
+    if (!m.plays) continue;
+    const b = el("button", "side-list");
     b.type = "button";
-    b.className = "side-list";
-    const t = document.createElement("strong");
-    t.textContent = `${m.label} Recap '${String(m.year).slice(2)}`;
-    const s = document.createElement("span");
+    const s = el(
+      "span",
+      null,
+      `${formatDuration(m.seconds)} · ${m.plays} rep.`,
+    );
     s.dataset.month = `${m.y}-${m.m}`;
-    s.textContent = `${formatDuration(m.seconds)} · ${m.plays} rep.`;
-    b.append(t, s);
+    b.append(
+      el("strong", null, `${m.label} Recap '${String(m.year).slice(2)}`),
+      s,
+    );
     b.addEventListener("click", () => {
       calUi.calYear = m.y;
       calUi.calMonth = m.m;
@@ -548,12 +1299,9 @@ function renderSideLists() {
   }
   els.sideLists.replaceChildren(...nodes);
 }
-
-// ---------- PATCH C: actualización in-place de métricas ----------
 function updateMetricsInPlace() {
   const sum = vmSummary();
   renderInlineStats(sum);
-
   const kpis = els.routes.home.querySelectorAll(".hero-kpi strong");
   if (kpis.length === 4) {
     kpis[0].textContent = sum.empty
@@ -563,22 +1311,26 @@ function updateMetricsInPlace() {
     kpis[2].textContent = String(sum.empty ? 0 : sum.unique);
     kpis[3].textContent = String(sum.empty ? 0 : sum.streak);
   }
-
-  const vals = [
-    sum.empty ? "0 min" : formatDuration(sum.totalSeconds),
-    String(sum.empty ? 0 : sum.totalPlays),
-    `🔁 ${sum.empty ? 0 : sum.totalLoops}`,
-    String(sum.empty ? 0 : sum.unique),
-    `${sum.empty ? 0 : sum.streak} días`,
-    sum.empty ? "—" : sum.peakLabel,
-  ];
-  els.routes.explore
-    .querySelectorAll(".explore-grid .stat-card")
-    .forEach((c, i) => {
-      const st = c.querySelector("strong");
-      if (st && vals[i] != null) st.textContent = vals[i];
-    });
-
+  const values = {
+    seconds: sum.empty ? "0 min" : formatDuration(sum.totalSeconds),
+    plays: String(sum.empty ? 0 : sum.totalPlays),
+    unique: String(sum.empty ? 0 : sum.unique),
+    streak: `${sum.empty ? 0 : sum.streak} días`,
+    peak: sum.empty ? "—" : sum.peakLabel,
+    loops: String(sum.empty ? 0 : sum.totalLoops),
+  };
+  if (state.route === "people" && !state.detail) {
+    const t = vmDirectory().totals;
+    values.dirSeconds = formatDuration(t.seconds || 0);
+    values.dirPlays = String(t.plays || 0);
+  }
+  if (state.route === "likes")
+    values.likedSeconds = formatDuration(vmLikesPage().totals.seconds);
+  document.querySelectorAll("[data-kpi]").forEach((card) => {
+    const v = values[card.dataset.kpi],
+      node = card.querySelector(".kpi-value");
+    if (node && v != null) node.textContent = v;
+  });
   const months = vmHome().months;
   els.sideLists.querySelectorAll("[data-month]").forEach((sp) => {
     const m = months.find((x) => `${x.y}-${x.m}` === sp.dataset.month);
@@ -601,71 +1353,48 @@ function makeCard(opts) {
     tag,
     name,
   } = opts;
-  const card = document.createElement("button");
+  const card = el("button", "card");
   card.type = "button";
-  card.className = "card";
-  const cover = document.createElement("div");
-  cover.className =
+  const cover = el(
+    "div",
     "card-cover" +
-    (kind === "wide" ? " wide" : "") +
-    (kind === "round" ? " round" : "") +
-    (kind === "month" ? " month" : "");
-  if (kind === "month") {
-    const n = document.createElement("span");
-    n.className = "m-name";
-    n.textContent = month.label;
-    const y = document.createElement("span");
-    y.className = "m-year";
-    y.textContent = `${month.year} · ${month.plays} rep.`;
-    cover.append(n, y);
-  } else if (artwork) {
-    const img = document.createElement("img");
+      (kind === "wide" ? " wide" : "") +
+      (kind === "round" ? " round" : "") +
+      (kind === "month" ? " month" : ""),
+  );
+  if (kind === "month")
+    cover.append(
+      el("span", "m-name", month.label),
+      el("span", "m-year", `${month.year} · ${month.plays} rep.`),
+    );
+  else if (artwork) {
+    const img = el("img");
     img.src = artwork;
     img.alt = "";
     img.loading = "lazy";
     img.decoding = "async";
     attachImgFallback(img, name || title);
     cover.append(img);
-  } else if (kind === "round") {
-    cover.append(createMonogram(name || title));
-  } else {
-    const na = document.createElement("span");
-    na.className = "no-art";
-    na.innerHTML = icon(state.scope === "music" ? "music" : "youtube", 34);
+  } else if (kind === "round") cover.append(createMonogram(name || title));
+  else {
+    const na = el("span", "no-art");
+    na.innerHTML = icon(isMusicScope() ? "music" : "youtube", 34);
     cover.append(na);
   }
-  if (tag) {
-    const t = document.createElement("span");
-    t.className = "cover-tag";
-    t.textContent = tag;
-    cover.append(t);
-  }
-  if (badge) {
-    const b = document.createElement("span");
-    b.className = "cover-badge";
-    b.textContent = badge;
-    cover.append(b);
-  }
+  if (tag) cover.append(el("span", "cover-tag", tag));
+  if (badge) cover.append(el("span", "cover-badge", badge));
   if (href || onOpen) {
-    const play = document.createElement("span");
-    play.className = "card-play";
-    play.setAttribute("aria-hidden", "true");
-    play.innerHTML = icon("play", 16);
-    cover.append(play);
+    const p = el("span", "card-play");
+    p.setAttribute("aria-hidden", "true");
+    p.innerHTML = icon("play", 16);
+    cover.append(p);
   }
-  const t = document.createElement("div");
-  t.className = "card-title";
-  t.textContent = title;
-  const s = document.createElement("div");
-  s.className = "card-sub";
-  s.textContent = sub || "";
-  card.append(cover, t, s);
-  if (stat) {
-    const st = document.createElement("div");
-    st.className = "card-stat";
-    st.textContent = stat;
-    card.append(st);
-  }
+  card.append(
+    cover,
+    el("div", "card-title", title),
+    el("div", "card-sub", sub || ""),
+  );
+  if (stat) card.append(el("div", "card-stat", stat));
   card.title = title;
   card.addEventListener("click", () => {
     if (onOpen) onOpen();
@@ -673,29 +1402,24 @@ function makeCard(opts) {
   });
   return card;
 }
-
 function skeletonRow() {
   const nodes = [];
   for (let i = 0; i < 5; i++) {
-    const c = document.createElement("div");
-    c.className = "skel-card";
-    const cover = document.createElement("div");
-    cover.className = "skel-cover";
-    const l1 = document.createElement("div");
-    l1.className = "skel-line";
-    const l2 = document.createElement("div");
-    l2.className = "skel-line short";
-    c.append(cover, l1, l2);
+    const c = el("div", "skel-card");
+    c.append(
+      el("div", "skel-cover"),
+      el("div", "skel-line"),
+      el("div", "skel-line short"),
+    );
     nodes.push(c);
   }
   return nodes;
 }
-
 function enableDrag(row) {
-  let down = false;
-  let dragged = false;
-  let startX = 0;
-  let startScroll = 0;
+  let down = false,
+    dragged = false,
+    startX = 0,
+    startScroll = 0;
   row.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     down = true;
@@ -731,53 +1455,34 @@ function enableDrag(row) {
     true,
   );
 }
-
 function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
-  const key = `${state.scope}|${state.route}|${state.period}|${title}`;
-  const sec = document.createElement("section");
-  sec.className = "shelf";
-  const head = document.createElement("div");
-  head.className = "shelf-head";
-  if (eyebrow) {
-    const eb = document.createElement("span");
-    eb.className = "shelf-eyebrow";
-    eb.textContent = eyebrow;
-    head.append(eb);
-  }
-  const ti = document.createElement("h2");
-  ti.className = "shelf-title";
-  ti.textContent = title;
-  head.append(ti);
-  const tools = document.createElement("div");
-  tools.className = "shelf-tools";
+  const key = `${state.scope}|${state.route}|${state.detail || ""}|${state.period}|${title}`;
+  const sec = el("section", "shelf");
+  const head = el("div", "shelf-head");
+  if (eyebrow) head.append(el("span", "shelf-eyebrow", eyebrow));
+  head.append(el("h2", "shelf-title", title));
+  const tools = el("div", "shelf-tools");
   if (moreRoute) {
-    const more = document.createElement("button");
+    const more = el("button", "shelf-more", "Ver todo");
     more.type = "button";
-    more.className = "shelf-more";
-    more.textContent = "Ver todo";
     more.addEventListener("click", () => navigate(state.scope, moreRoute));
     tools.append(more);
   }
-  const prev = document.createElement("button");
+  const prev = el("button", "shelf-arrow");
   prev.type = "button";
-  prev.className = "shelf-arrow";
   prev.setAttribute("aria-label", "Desplazar a la izquierda");
   prev.innerHTML = icon("chevronLeft", 16);
-  const next = document.createElement("button");
+  const next = el("button", "shelf-arrow");
   next.type = "button";
-  next.className = "shelf-arrow";
   next.setAttribute("aria-label", "Desplazar a la derecha");
   next.innerHTML = icon("chevronRight", 16);
   tools.append(prev, next);
   head.append(tools);
-
-  const row = document.createElement("div");
-  row.className = "shelf-row";
+  const row = el("div", "shelf-row");
   row.tabIndex = 0;
   row.setAttribute("role", "group");
   row.setAttribute("aria-label", title);
   row.append(...skeletonRow());
-
   const updateArrows = () => {
     prev.disabled = row.scrollLeft <= 4;
     next.disabled = row.scrollLeft + row.clientWidth >= row.scrollWidth - 4;
@@ -788,7 +1493,6 @@ function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
   next.addEventListener("click", () =>
     row.scrollBy({ left: row.clientWidth * 0.8, behavior: "smooth" }),
   );
-  // PATCH B: guardar posición en cada scroll (incluye smooth y drag).
   row.addEventListener(
     "scroll",
     () => {
@@ -808,8 +1512,6 @@ function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
     }
   });
   enableDrag(row);
-
-  // PATCH B: mount idempotente que restaura la posición guardada.
   const mount = () => {
     if (sec._mounted) return;
     sec._mounted = true;
@@ -819,31 +1521,29 @@ function shelf({ eyebrow, title, cardsFactory, moreRoute }) {
     requestAnimationFrame(updateArrows);
   };
   pendingShelves.push({ sec, mount });
-
   sec.append(head, row);
   return sec;
 }
-
-// PATCH B: hidratación post-render — síncrono si el shelf ya está en viewport.
 function hydrateShelves() {
   const cr = els.content.getBoundingClientRect();
   for (const item of pendingShelves) {
     const { sec, mount } = item;
     if (sec._mounted) continue;
     const r = sec.getBoundingClientRect();
-    const visible = r.top < cr.bottom + 240 && r.bottom > cr.top - 240;
-    if (visible || !("IntersectionObserver" in window)) {
+    if (
+      (r.top < cr.bottom + 240 && r.bottom > cr.top - 240) ||
+      !("IntersectionObserver" in window)
+    )
       mount();
-    } else {
+    else {
       const io = new IntersectionObserver(
         (entries) => {
-          for (const en of entries) {
+          for (const en of entries)
             if (en.isIntersecting) {
               mount();
               io.disconnect();
               observers.delete(io);
             }
-          }
         },
         { root: els.content, rootMargin: "400px 0px" },
       );
@@ -853,7 +1553,6 @@ function hydrateShelves() {
   }
   pendingShelves.length = 0;
 }
-
 function trackCards(tracks, wide = false) {
   return tracks.map((t) =>
     makeCard({
@@ -888,60 +1587,72 @@ function peopleCards(list) {
   return list.map((a) =>
     makeCard({
       kind: "round",
-      artwork: a.artwork,
+      artwork: a.artwork || a.avatar,
       title: a.name,
       sub: `${a.plays} reproducciones`,
       stat: a.seconds > 0 ? formatDuration(a.seconds) : "visitas",
-      href: a.url || undefined,
-      onOpen: a.url
-        ? undefined
-        : () => {
-            state.q = a.name;
-            els.globalSearch.value = a.name;
-            navigate(state.scope, "results");
-          },
+      onOpen: () => navigate(state.scope, "people", a.name),
     }),
   );
 }
-function emptyBox(msg) {
-  const p = document.createElement("p");
-  p.className = "empty-msg";
-  p.textContent = msg;
-  return p;
+function monthCards(months) {
+  return months
+    .filter((m) => m.plays > 0)
+    .map((m) =>
+      makeCard({
+        kind: "month",
+        month: m,
+        title: `${m.label} Recap '${String(m.year).slice(2)}`,
+        sub: `${formatDuration(m.seconds)} · ${m.plays} rep.`,
+        onOpen: () => {
+          calUi.calYear = m.y;
+          calUi.calMonth = m.m;
+          calUi.selectedDateKey = toDateKey(new Date(m.y, m.m, 1));
+          calUi.calViewMode = "month";
+          navigate(state.scope, "calendar");
+        },
+      }),
+    );
 }
-function routeTitle(text) {
-  const h = document.createElement("h2");
-  h.className = "route-title";
-  h.tabIndex = -1;
-  h.textContent = text;
-  return h;
+function trackTable(tracks, { showBar = false } = {}) {
+  const max = Math.max(1, ...tracks.map((t) => t.seconds || 0));
+  const list = el("div", "pt");
+  tracks.forEach((t, i) =>
+    list.append(
+      rankRow({
+        rank: i + 1,
+        medal: i < 3 ? i + 1 : null,
+        thumb: t.artwork,
+        name: t.title,
+        sub: t.artist,
+        tag: formatTag(t),
+        value: `${t.plays}x · ${t.seconds > 0 ? formatDuration(t.seconds) : "Imp."}`,
+        pct: showBar ? Math.round(((t.seconds || 0) / max) * 100) : null,
+        href: t.videoUrl || resolveVideoUrl(t),
+      }),
+    ),
+  );
+  return list;
 }
 
-// ---------- rutas ----------
+// ---------- HOME ----------
 function renderHome() {
-  const plays = periodPlays();
-  const vm = vmHome();
-  const sum = vmSummary();
+  const plays = periodPlays(),
+    vm = vmHome(),
+    sum = vmSummary();
   const host = els.routes.home;
   host.replaceChildren();
-
-  const hero = document.createElement("div");
-  hero.className = "hero";
-  const g = document.createElement("h2");
-  g.className = "route-title hero-greet";
+  const hero = el("div", "hero");
+  const g = el("h2", "route-title hero-greet", greeting());
   g.tabIndex = -1;
-  g.textContent = greeting();
-  const sub = document.createElement("div");
-  sub.className = "hero-sub";
-  sub.textContent = `Tu recap de ${scopeName()} · ${periodLabel()}`;
-  const kpis = document.createElement("div");
-  kpis.className = "hero-kpis";
+  hero.append(
+    g,
+    el("div", "hero-sub", `Tu recap de ${scopeName()} · ${periodLabel()}`),
+  );
+  const kpis = el("div", "hero-kpis");
   const kpi = (label, value) => {
-    const k = document.createElement("span");
-    k.className = "hero-kpi";
-    const s = document.createElement("strong");
-    s.textContent = value;
-    k.append(s, ` ${label}`);
+    const k = el("span", "hero-kpi");
+    k.append(el("strong", null, value), ` ${label}`);
     return k;
   };
   kpis.append(
@@ -950,19 +1661,24 @@ function renderHome() {
     kpi("únicos", String(sum.empty ? 0 : sum.unique)),
     kpi("días de racha", String(sum.empty ? 0 : sum.streak)),
   );
-  hero.append(g, sub, kpis);
+  hero.append(kpis);
   host.append(hero);
-
-  if (plays.length === 0) {
+  if (!plays.length) {
     host.append(
-      emptyBox(
+      emptyState(
+        "spark",
         "Todavía no hay datos en este período. Reproducí al menos 20 segundos en YouTube o YT Music y volvé.",
+        ghostBtn("Ver todo el historial", "clock", () => {
+          state.period = "all";
+          state.animateNext = true;
+          localStorage.setItem("recapFullPeriod", "all");
+          renderAll();
+        }),
       ),
     );
     return;
   }
-
-  if (state.scope === "music") {
+  if (isMusicScope()) {
     if (vm.top.length)
       host.append(
         shelf({
@@ -1047,29 +1763,12 @@ function renderHome() {
         }),
       );
   }
-
-  const monthCards = vm.months
-    .filter((m) => m.plays > 0)
-    .map((m) =>
-      makeCard({
-        kind: "month",
-        month: m,
-        title: `${m.label} Recap '${String(m.year).slice(2)}`,
-        sub: `${formatDuration(m.seconds)} · ${m.plays} rep.`,
-        onOpen: () => {
-          calUi.calYear = m.y;
-          calUi.calMonth = m.m;
-          calUi.selectedDateKey = toDateKey(new Date(m.y, m.m, 1));
-          calUi.calViewMode = "month";
-          navigate(state.scope, "calendar");
-        },
-      }),
-    );
-  if (monthCards.length)
+  const mc = monthCards(vm.months);
+  if (mc.length)
     host.append(
       shelf({
         title: "Recaps por mes",
-        cardsFactory: () => monthCards,
+        cardsFactory: () => mc,
         moreRoute: "calendar",
       }),
     );
@@ -1090,125 +1789,203 @@ function renderHome() {
     );
 }
 
-function statCard(label, value) {
-  const card = document.createElement("div");
-  card.className = "stat-card";
-  const sp = document.createElement("span");
-  sp.className = "stat-label";
-  sp.textContent = label;
-  const st = document.createElement("strong");
-  st.textContent = value;
-  card.append(sp, st);
-  return card;
-}
-
+// ---------- EXPLORAR ----------
 function renderExplore() {
-  const plays = periodPlays();
-  const vm = vmActivity();
-  const sum = vmSummary();
+  const plays = periodPlays(),
+    vm = vmActivity(),
+    ins = vmInsights(),
+    sum = ins.sum,
+    micro = vmMicro();
   const host = els.routes.explore;
   host.replaceChildren();
-  host.append(routeTitle("Explorar"));
+  const noPrevNote = ins.hasPrev ? null : "primer período con datos";
 
-  const grid = document.createElement("div");
-  grid.className = "explore-grid";
-  grid.append(
-    statCard(
-      "Tiempo total",
-      sum.empty ? "0 min" : formatDuration(sum.totalSeconds),
-    ),
-    statCard("Reproducciones", String(sum.empty ? 0 : sum.totalPlays)),
-    statCard("Bucles", `🔁 ${sum.empty ? 0 : sum.totalLoops}`),
-    statCard("Títulos únicos", String(sum.empty ? 0 : sum.unique)),
-    statCard("Racha actual", `${sum.empty ? 0 : sum.streak} días`),
-    statCard("Hora pico", sum.empty ? "—" : sum.peakLabel),
-  );
-  host.append(grid);
-
-  const hoursBox = document.createElement("div");
-  hoursBox.className = "explore-box wide";
-  const hTitle = document.createElement("h3");
-  hTitle.textContent =
-    "Actividad por hora del día · clic en una barra para ver ese horario";
-  const chart = document.createElement("div");
-  chart.className = "hours-chart";
-  chart.append(
-    ...vm.hours.map((sec, h) => {
-      const bar = document.createElement("div");
-      bar.className = sec === 0 ? "hour-bar zero" : "hour-bar";
-      if (state.hourFilter === h) bar.classList.add("selected");
-      const pct =
-        vm.maxHour > 0 ? Math.max(5, Math.round((sec / vm.maxHour) * 100)) : 5;
-      bar.style.height = sec === 0 ? "4px" : `${pct}%`;
-      tipify(
-        bar,
-        () => `${String(h).padStart(2, "0")}:00 — ${formatDuration(sec)}`,
-      );
-      bar.addEventListener("click", () => {
-        state.hourFilter = state.hourFilter === h ? null : h;
-        renderExplore();
-        hydrateShelves();
-      });
-      return bar;
+  host.append(
+    pageHero({
+      eyebrow: `${scopeName()} · ${periodLabel()}`,
+      title: "Explorar",
+      desc: sum.empty
+        ? "Sin reproducciones en este período."
+        : `${sum.totalPlays} reproducciones de ${sum.unique} títulos distintos. Tu momento más fuerte: ${sum.peakLabel}.`,
+      visual: heroVisualExplore(),
+      actions: [
+        primaryBtn("Playlist del período", "play", () =>
+          playIds(
+            sum.empty ? [] : sum.topTracks.map((t) => t.videoId),
+            "este período",
+          ),
+        ),
+        ghostBtn("Ver calendario", "calendar", () =>
+          navigate(state.scope, "calendar"),
+        ),
+      ],
     }),
   );
-  const labels = document.createElement("div");
-  labels.className = "hours-labels";
-  for (const t of ["00h", "06h", "12h", "18h", "23h"]) {
-    const s = document.createElement("span");
-    s.textContent = t;
-    labels.append(s);
-  }
-  hoursBox.append(hTitle, chart, labels);
-  host.append(hoursBox);
 
-  if (state.hourFilter != null) {
-    const hourPlays = plays
-      .filter((p) => new Date(p.timestamp).getHours() === state.hourFilter)
-      .sort((a, b) => b.timestamp - a.timestamp);
-    const box = document.createElement("div");
-    box.className = "explore-box wide";
-    const t = document.createElement("h3");
-    t.textContent = `Reproducciones de las ${String(state.hourFilter).padStart(2, "0")}:00 (${hourPlays.length})`;
-    box.append(t);
-    if (hourPlays.length === 0)
-      box.append(emptyBox("Nada en ese horario dentro del período."));
-    else {
-      const ul = document.createElement("ul");
-      ul.className = "top-list";
-      ul.append(
-        ...hourPlays
-          .slice(0, 20)
-          .map((p, i) =>
-            buildTrackRow(
-              String(i + 1),
-              p.artwork,
-              p.title,
-              `${p.artist} · ${formatTimeEs(p.timestamp)}`,
-              formatClock(p.seconds || 0),
-              { href: resolveVideoUrl(p) },
-            ),
-          ),
-      );
-      box.append(ul);
-    }
-    host.append(box);
-  }
+  host.append(
+    kpiStrip([
+      kpiCard({
+        key: "seconds",
+        iconName: "clock",
+        label: "Tiempo total",
+        value: sum.empty ? "0 min" : formatDuration(sum.totalSeconds),
+        delta: ins.deltas?.seconds ?? null,
+        note: noPrevNote,
+        countTo: sum.empty ? 0 : sum.totalSeconds,
+        fmt: formatDuration,
+        micro: (() => {
+          const d = el("div");
+          d.innerHTML = sparkArea(ins.trend, { w: 160, h: 30, id: "k1" });
+          return d.firstChild;
+        })(),
+      }),
+      kpiCard({
+        key: "plays",
+        iconName: "playCircle",
+        label: "Reproducciones",
+        value: String(sum.empty ? 0 : sum.totalPlays),
+        delta: ins.deltas?.plays ?? null,
+        note: noPrevNote,
+        countTo: sum.empty ? 0 : sum.totalPlays,
+        fmt: String,
+        micro: microBars(micro.days7.map((d) => d.plays)),
+      }),
+      kpiCard({
+        key: "unique",
+        iconName: "hash",
+        label: "Títulos únicos",
+        value: String(sum.empty ? 0 : sum.unique),
+        delta: ins.deltas?.unique ?? null,
+        note: noPrevNote,
+        countTo: sum.empty ? 0 : sum.unique,
+        fmt: String,
+        micro: microRing(micro.uniqueRatio),
+      }),
+      kpiCard({
+        key: "loops",
+        iconName: "loop",
+        label: "Bucles",
+        value: String(sum.empty ? 0 : sum.totalLoops),
+        note: `${Math.round(micro.loopsRatio * 100)}% del total`,
+        countTo: sum.empty ? 0 : sum.totalLoops,
+        fmt: String,
+        micro: microRatio(micro.loopsRatio),
+      }),
+      kpiCard({
+        key: "streak",
+        iconName: "flame",
+        label: "Racha actual",
+        value: `${sum.empty ? 0 : sum.streak} días`,
+        note: "últimos 7 días",
+        micro: microDots(micro.days7),
+      }),
+      kpiCard({
+        key: "peak",
+        iconName: "peak",
+        label: "Hora pico",
+        value: sum.empty ? "—" : sum.peakLabel,
+        note: "tu horario más fuerte",
+        micro: microTicks(micro.hours),
+      }),
+    ]),
+  );
 
-  const wdSec = new Array(7).fill(0);
-  const wdPlays = new Array(7).fill(0);
+  const grid = el("div", "route-grid");
+  const hourLabels = Array.from({ length: 24 }, (_, i) =>
+    [0, 6, 12, 18, 23].includes(i) ? `${String(i).padStart(2, "0")}h` : "",
+  );
+  const hourFull = Array.from(
+    { length: 24 },
+    (_, i) => `${String(i).padStart(2, "0")}:00`,
+  );
+  const modeRow = pillRow(
+    [
+      { value: "bars", label: "Barras", icon: "chart" },
+      { value: "area", label: "Área", icon: "area" },
+    ],
+    state.hoursMode,
+    (v) => {
+      state.hoursMode = v;
+      localStorage.setItem("recapHoursMode", v);
+      setPills(modeRow, v);
+      state.sigs = computeSigs();
+      renderExplore();
+      hydrateShelves();
+    },
+    "Modo del gráfico",
+  );
+  const dayTools = [modeRow];
+  if (ins.hasPrev)
+    dayTools.push(
+      tinyToggle("Anterior", "compare", state.showGhost, () => {
+        state.showGhost = !state.showGhost;
+        localStorage.setItem("recapGhost", state.showGhost ? "1" : "0");
+        state.sigs = computeSigs();
+        renderExplore();
+        hydrateShelves();
+      }),
+    );
+  if (state.hourFilter != null)
+    dayTools.push(
+      ghostBtn("Quitar filtro", "close", () => {
+        state.hourFilter = null;
+        state.sigs = computeSigs();
+        renderExplore();
+        hydrateShelves();
+      }),
+    );
+  const dayChart = barChart({
+    values: vm.hours,
+    prev: vmPrevHours(),
+    labels: hourLabels,
+    fullLabels: hourFull,
+    mode: state.hoursMode,
+    ghost: state.showGhost && ins.hasPrev,
+    selected: state.hourFilter,
+    night: (i) => i < 6,
+    noun: "de escucha",
+    onPick: (h) => {
+      state.hourFilter = state.hourFilter === h ? null : h;
+      state.sigs = computeSigs();
+      renderExplore();
+      hydrateShelves();
+    },
+  });
+  const dayBody = el("div");
+  dayBody.append(dayChart);
+  const legend = el("div", "hx-legend");
+  const lg = (color, label) => {
+    const s = el("span");
+    const i = el("i");
+    i.style.background = color;
+    s.append(i, label);
+    return s;
+  };
+  legend.append(
+    lg("var(--data-lo)", "este período"),
+    lg("var(--annotate)", "pico"),
+    lg("rgba(56,189,248,.6)", "promedio / anterior"),
+    lg("rgba(255,255,255,.2)", "madrugada"),
+  );
+  dayBody.append(legend);
+  grid.append(
+    panel({
+      iconName: "clock",
+      title: "Tu día",
+      sub: "clic en una barra para ver ese horario",
+      span: 8,
+      tools: dayTools,
+      body: dayBody,
+    }),
+  );
+
+  const wdSec = new Array(7).fill(0),
+    wdPlays = new Array(7).fill(0);
   for (const p of plays) {
     const idx = (new Date(p.timestamp).getDay() + 6) % 7;
     wdSec[idx] += p.seconds || 0;
     wdPlays[idx] += 1;
   }
-  const wdBox = document.createElement("div");
-  wdBox.className = "explore-box wide";
-  const wdTitle = document.createElement("h3");
-  wdTitle.textContent = "Rendimiento por día de la semana";
-  const wdChart = document.createElement("div");
-  wdChart.className = "weekday-chart";
-  const wdLabels = ["L", "M", "X", "J", "V", "S", "D"];
   const wdFull = [
     "Lunes",
     "Martes",
@@ -1218,73 +1995,50 @@ function renderExplore() {
     "Sábado",
     "Domingo",
   ];
-  const maxWd = Math.max(...wdSec, 1);
-  wdChart.append(
-    ...wdSec.map((sec, i) => {
-      const col = document.createElement("div");
-      col.className = "wd-col";
-      const bar = document.createElement("div");
-      bar.className =
-        sec === 0 ? "wd-bar zero" : sec === maxWd ? "wd-bar peak" : "wd-bar";
-      bar.style.height =
-        sec === 0 ? "4px" : `${Math.max(8, Math.round((sec / maxWd) * 100))}%`;
-      tipify(
-        bar,
-        () => `${wdFull[i]}: ${formatDuration(sec)} (${wdPlays[i]} rep.)`,
-      );
-      const lbl = document.createElement("span");
-      lbl.className = "wd-lbl";
-      lbl.textContent = wdLabels[i];
-      col.append(bar, lbl);
-      return col;
+  const weekChart = barChart({
+    values: wdSec,
+    labels: ["L", "M", "X", "J", "V", "S", "D"],
+    fullLabels: wdFull,
+    onPick: null,
+    noun: "de escucha",
+  });
+  grid.append(
+    panel({
+      iconName: "calendar",
+      title: "Tu semana",
+      sub: "lunes a domingo",
+      span: 4,
+      body: weekChart,
     }),
   );
-  wdBox.append(wdTitle, wdChart);
-  host.append(wdBox);
 
-  const chipsBox = document.createElement("div");
-  chipsBox.className = "explore-box wide";
-  const cTitle = document.createElement("h3");
-  cTitle.textContent = "Formatos, origen e interacciones";
-  const chips = document.createElement("div");
-  chips.className = "breakdown-grid";
-  chips.append(
-    ...vm.chips.map(([label, val]) => {
-      const d = document.createElement("div");
-      d.className = "bd-chip";
-      const sp = document.createElement("span");
-      sp.textContent = label;
-      const st = document.createElement("strong");
-      st.textContent = String(val);
-      d.append(sp, st);
-      return d;
+  grid.append(
+    panel({
+      iconName: "disc",
+      title: "Formatos",
+      sub: "sobre el total del período",
+      span: 4,
+      body: donutChart(vmFormats()),
     }),
   );
-  chipsBox.append(cTitle, chips);
-  host.append(chipsBox);
 
+  const catBody = el("div");
   if (vm.catEntries.length) {
-    const box = document.createElement("div");
-    box.className = "explore-box wide";
-    const t = document.createElement("h3");
-    t.textContent = "Categorías / Géneros";
-    const bars = document.createElement("div");
-    bars.className = "cat-bars";
+    const bars = el("div", "cat-bars");
     bars.append(
       ...vm.catEntries.map((st) => {
-        const row = document.createElement("div");
-        row.className = "cat-row";
-        const top = document.createElement("div");
-        top.className = "cat-row-top";
-        const lbl = document.createElement("span");
-        lbl.textContent = translateCategory(st.cat);
-        const m = document.createElement("span");
-        m.textContent = `${st.pct}% · ${st.plays}x (${formatDuration(st.seconds)})`;
-        top.append(lbl, m);
-        const track = document.createElement("div");
-        track.className = "cat-track";
-        const fill = document.createElement("div");
-        fill.className = "cat-fill";
+        const row = el("div", "cat-row");
+        const top = el("div", "cat-row-top");
+        top.append(
+          el("span", null, translateCategory(st.cat)),
+          el(
+            "span",
+            null,
+            `${st.pct}% · ${st.plays}x (${formatDuration(st.seconds)})`,
+          ),
+        );
+        const track = el("div", "cat-track");
+        const fill = el("div", "cat-fill");
         fill.style.width = `${st.pct}%`;
         track.append(fill);
         tipify(
@@ -1296,33 +2050,209 @@ function renderExplore() {
         return row;
       }),
     );
-    box.append(t, bars);
-    host.append(box);
-  }
-
-  const listBox = document.createElement("div");
-  listBox.className = "explore-box wide";
-  const lt = document.createElement("h3");
-  lt.textContent = "Top escuchado / visto";
-  const ul = document.createElement("ul");
-  ul.className = "top-list";
-  ul.append(
-    ...(sum.empty ? [] : sum.topTracks.slice(0, 15)).map((t, i) =>
-      buildTrackRow(
-        String(i + 1),
-        t.artwork,
-        t.title,
-        t.artist,
-        `${t.plays}x · ${t.seconds > 0 ? formatDuration(t.seconds) : "Imp."}`,
-        { href: t.videoUrl || undefined },
-      ),
+    catBody.append(bars);
+  } else
+    catBody.append(
+      emptyState("disc", "Sin categorías registradas en este período."),
+    );
+  const chips = el("div", "stat-chips");
+  const chip = (iconName, label, value) => {
+    const c = el("div", "stat-chip");
+    const i = el("span");
+    i.innerHTML = icon(iconName, 14);
+    c.append(i, el("span", null, label), el("strong", null, String(value)));
+    return c;
+  };
+  chips.append(
+    chip("heart", "Me gusta", vm.likesCount),
+    chip("bell", "Suscripciones", vm.subsCount),
+    chip("search", "Búsquedas", vm.searchesCount),
+    chip("queue", "Mix / Playlist", vm.mixCount),
+    chip("bolt", "Vel. promedio", vm.avgRate),
+    chip(
+      "music",
+      "Música en YouTube",
+      vm.chips.find((c) => c[0] === "Música en YouTube")?.[1] ?? 0,
     ),
   );
-  listBox.append(lt, ul);
-  host.append(listBox);
+  chips.style.marginTop = "14px";
+  catBody.append(chips);
+  grid.append(
+    panel({
+      iconName: "grid",
+      title: "Categorías e interacciones",
+      span: 8,
+      body: catBody,
+    }),
+  );
+
+  grid.append(insightsPanel(vmNarrative()));
+
+  if (state.hourFilter != null) {
+    const hourPlays = plays
+      .filter((p) => new Date(p.timestamp).getHours() === state.hourFilter)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    const body = el("div");
+    if (!hourPlays.length)
+      body.append(
+        emptyState("clock", "Nada en ese horario dentro del período."),
+      );
+    else {
+      const list = el("div", "pt");
+      hourPlays.slice(0, 20).forEach((p, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: p.artwork,
+            name: p.title,
+            sub: `${p.artist} · ${formatTimeEs(p.timestamp)}`,
+            tag: formatTag(p),
+            value: formatClock(p.seconds || 0),
+            href: resolveVideoUrl(p),
+          }),
+        ),
+      );
+      body.append(list);
+    }
+    grid.append(
+      panel({
+        iconName: "target",
+        title: `Reproducciones de las ${String(state.hourFilter).padStart(2, "0")}:00`,
+        sub: `${hourPlays.length} en el período`,
+        span: 12,
+        body,
+      }),
+    );
+  }
+  host.append(grid);
+
+  if (!sum.empty) {
+    host.append(
+      shelf({
+        title: "Top del período",
+        cardsFactory: () =>
+          trackCards(sum.topTracks.slice(0, 12), !isMusicScope()),
+        moreRoute: "people",
+      }),
+    );
+    const dir = vmDirectory().list.slice(0, 12);
+    if (dir.length)
+      host.append(
+        shelf({
+          title: isMusicScope() ? "Artistas destacados" : "Canales destacados",
+          cardsFactory: () => peopleCards(dir),
+          moreRoute: "people",
+        }),
+      );
+    if (isMusicScope() && vm.topAlbums.length)
+      host.append(
+        shelf({
+          title: "Álbumes",
+          cardsFactory: () =>
+            vm.topAlbums.map((a) =>
+              makeCard({
+                artwork: a.artwork,
+                title: a.album,
+                sub: a.artist,
+                name: a.artist,
+                stat: `${a.plays}x · ${formatDuration(a.seconds)}`,
+              }),
+            ),
+        }),
+      );
+    if (vm.topSearches.length)
+      host.append(
+        shelf({
+          title: "Búsquedas top",
+          cardsFactory: () =>
+            vm.topSearches.map((s) =>
+              makeCard({
+                title: s.query,
+                sub: s.source === "yt_music" ? "YT Music" : "YouTube",
+                stat: `${s.count} veces`,
+                href: s.url,
+              }),
+            ),
+        }),
+      );
+    if (vm.topSkips.length)
+      host.append(
+        shelf({
+          title: "Más salteadas",
+          cardsFactory: () =>
+            vm.topSkips.map((s) =>
+              makeCard({
+                artwork: s.artwork,
+                title: s.title,
+                sub: s.artist,
+                name: s.artist,
+                stat: `${s.count} skips`,
+                href: s.videoUrl,
+              }),
+            ),
+        }),
+      );
+  }
 }
 
+// ---------- CALENDARIO ----------
 function renderCalendarRoute() {
+  const hero = vmCalHero();
+  els.calHero.replaceChildren();
+  els.calHero.append(
+    pageHero({
+      eyebrow: `${scopeName()} · ${calUi.calYear}`,
+      title: "Tu calendario",
+      desc:
+        hero.yearPlays > 0
+          ? `${hero.activeDays} días con actividad en ${calUi.calYear}${hero.bestMonth ? ` · mejor mes: ${hero.bestMonth.label} (${formatDuration(hero.bestMonth.seconds)})` : ""}.`
+          : `Sin actividad registrada en ${calUi.calYear}.`,
+      visual: heroVisualCalendar(),
+      actions: hero.bestMonth
+        ? [
+            ghostBtn(`Ir a ${hero.bestMonth.label}`, "trophy", () => {
+              calUi.calMonth = hero.bestMonth.index;
+              calUi.calViewMode = "month";
+              calUi.selectedDateKey = toDateKey(
+                new Date(calUi.calYear, hero.bestMonth.index, 1),
+              );
+              syncCalModeButtons();
+              state.sigs = computeSigs();
+              renderCalendarRoute();
+            }),
+          ]
+        : [],
+      insight:
+        hero.maxStreak > 0
+          ? {
+              icon: "flame",
+              text: `Tu racha más larga de ${calUi.calYear} fue de <strong>${hero.maxStreak} días</strong> seguidos con actividad.`,
+            }
+          : null,
+      kpis: [
+        kpiCard({
+          iconName: "clock",
+          label: `Total ${calUi.calYear}`,
+          value: formatDuration(hero.yearSeconds),
+        }),
+        kpiCard({
+          iconName: "playCircle",
+          label: "Reproducciones",
+          value: String(hero.yearPlays),
+        }),
+        kpiCard({
+          iconName: "calendarCheck",
+          label: "Días activos",
+          value: String(hero.activeDays),
+        }),
+        kpiCard({
+          iconName: "flame",
+          label: "Racha máxima",
+          value: `${hero.maxStreak} días`,
+        }),
+      ],
+    }),
+  );
   renderCalendarView({
     dom: domCal,
     uiState: calUi,
@@ -1339,170 +2269,738 @@ function renderCalendarRoute() {
     onExportPng: (cardData, btn) => exportPngCard(cardData, btn),
   });
 }
+function syncCalModeButtons() {
+  document
+    .querySelectorAll(".cal-mode-btn[data-calview]")
+    .forEach((b) =>
+      b.classList.toggle("active", b.dataset.calview === calUi.calViewMode),
+    );
+}
 
+// ---------- PERSONAS ----------
 function renderPeople() {
   const host = els.routes.people;
   host.replaceChildren();
-  host.append(
-    routeTitle(state.scope === "music" ? "Tus artistas" : "Tus canales"),
-  );
-  if (state.scope === "music") {
-    const vm = memoVM("activityPeople", () =>
-      activityVM(
-        periodPlays(),
-        meta(store.interactions),
-        meta(store.searches),
-        [],
-      ),
-    );
-    const box = document.createElement("div");
-    box.className = "explore-box wide";
-    const t = document.createElement("h3");
-    t.textContent = "Artistas por tiempo escuchado";
-    const ul = document.createElement("ul");
-    ul.className = "top-list";
-    ul.append(
-      ...vm.topArtists.map((a, i) =>
-        buildTrackRow(
-          String(i + 1),
-          a.artwork,
-          a.name,
-          `${a.plays} reproducciones`,
-          formatDuration(a.seconds),
-          { href: a.url || undefined, avatar: true },
-        ),
-      ),
-    );
-    box.append(t, ul);
-    host.append(box);
-    const all = memoVM("homePeople", () =>
-      homeVM(periodPlays(), allPlays(), [], [], []),
-    ).artists;
-    if (all.length)
-      host.append(
-        shelf({
-          title: "Explorar artistas",
-          cardsFactory: () => peopleCards(all),
-        }),
-      );
+  if (state.detail) {
+    renderPersonDetail(host, state.detail);
     return;
   }
-  const vm = vmChannels("time", 0);
-  const stats = document.createElement("div");
-  stats.className = "explore-grid";
-  stats.append(
-    statCard("Canales únicos", String(vm.unique)),
-    statCard("Visitas a canales", String(vm.totalVisits)),
-    statCard("Con tiempo reproducido", String(vm.withTime.length)),
-  );
-  host.append(stats);
-  const box = document.createElement("div");
-  box.className = "explore-box wide";
-  const t = document.createElement("h3");
-  t.textContent = "Ranking de canales";
-  const ul = document.createElement("ul");
-  ul.className = "top-list";
-  ul.append(
-    ...vm.ranked.map((ch, i) =>
-      buildTrackRow(
-        String(i + 1),
-        ch.avatar,
-        ch.name,
-        ch.sub,
-        ch.seconds > 0 ? formatDuration(ch.seconds) : `${ch.visits}x`,
-        { href: ch.url || undefined, avatar: true, barPct: ch.barPct },
-      ),
-    ),
-  );
-  box.append(t, ul);
-  host.append(box);
-  if (vm.recent.length) {
-    const rb = document.createElement("div");
-    rb.className = "explore-box wide";
-    const rt = document.createElement("h3");
-    rt.textContent = "Últimas visitas a canales";
-    const rul = document.createElement("ul");
-    rul.className = "top-list";
-    rul.append(
-      ...vm.recent.map((v) =>
-        buildTrackRow(
-          "👁",
-          v.avatar,
-          v.name,
-          relativeTime(v.timestamp),
-          "Abrir ↗",
-          { href: v.url || undefined, avatar: true },
+  const dir = vmDirectory(),
+    music = isMusicScope();
+  const totalSec = dir.totals.seconds || 0;
+  const topShare =
+    totalSec > 0 && dir.list[0]
+      ? Math.round((dir.list[0].seconds / totalSec) * 100)
+      : 0;
+  const kpis = music
+    ? [
+        kpiCard({
+          iconName: "mic",
+          label: "Artistas",
+          value: String(dir.totals.count),
+        }),
+        kpiCard({
+          key: "dirSeconds",
+          iconName: "clock",
+          label: "Tiempo escuchado",
+          value: formatDuration(totalSec),
+        }),
+        kpiCard({
+          key: "dirPlays",
+          iconName: "playCircle",
+          label: "Reproducciones",
+          value: String(dir.totals.plays),
+        }),
+        kpiCard({
+          iconName: "trophy",
+          label: "Top artista",
+          value: dir.list[0]?.name || "—",
+        }),
+      ]
+    : [
+        kpiCard({
+          iconName: "people",
+          label: "Canales",
+          value: String(dir.totals.count),
+        }),
+        kpiCard({
+          key: "dirSeconds",
+          iconName: "clock",
+          label: "Tiempo reproducido",
+          value: formatDuration(totalSec),
+        }),
+        kpiCard({
+          iconName: "eye",
+          label: "Visitas",
+          value: String(dir.totals.visits),
+        }),
+        kpiCard({
+          iconName: "playCircle",
+          label: "Con tiempo",
+          value: String(dir.totals.withTime),
+        }),
+      ];
+  host.append(
+    pageHero({
+      eyebrow: `${scopeName()} · ${periodLabel()}`,
+      title: music ? "Tus artistas" : "Tus canales",
+      desc: music
+        ? "Ordená por tiempo, reproducciones o nombre. Tocá una card para ver su detalle."
+        : "Ordená por tiempo, visitas o reproducciones y filtrá por duración mínima.",
+      visual: heroVisualPeople(dir.list),
+      actions: [
+        primaryBtn("Playlist de los top", "play", () =>
+          playIds(
+            aggregateTracks(periodPlays()).map((t) => t.videoId),
+            "tus top",
+          ),
         ),
+      ],
+      insight:
+        topShare >= 15
+          ? {
+              icon: "target",
+              text: `El <strong>${topShare}%</strong> de tu tiempo es de <strong>${dir.list[0].name}</strong>.`,
+            }
+          : null,
+      kpis,
+    }),
+  );
+
+  const sortItems = music
+    ? [
+        { value: "time", label: "Tiempo", icon: "clock" },
+        { value: "plays", label: "Reproducciones", icon: "playCircle" },
+        { value: "name", label: "Nombre", icon: "list" },
+      ]
+    : [
+        { value: "time", label: "Tiempo", icon: "clock" },
+        { value: "visits", label: "Visitas", icon: "eye" },
+        { value: "plays", label: "Reproducciones", icon: "playCircle" },
+      ];
+  const sortRow = pillRow(
+    sortItems,
+    state.peopleSort,
+    (v) => {
+      state.peopleSort = v;
+      localStorage.setItem("recapPeopleSort", v);
+      setPills(sortRow, v);
+      state.sigs = computeSigs();
+      refreshDirectory();
+    },
+    "Ordenar",
+  );
+  const tools = [sortRow];
+  if (!music) {
+    const minItems = [
+      { value: 0, label: "Todos" },
+      { value: 1, label: "> 0m" },
+      { value: 900, label: "+15m" },
+      { value: 3600, label: "+1h" },
+    ];
+    const minRow = pillRow(
+      minItems,
+      state.peopleMinSec,
+      (v) => {
+        state.peopleMinSec = v;
+        localStorage.setItem("recapPeopleMin", String(v));
+        setPills(minRow, v);
+        state.sigs = computeSigs();
+        refreshDirectory();
+      },
+      "Duración mínima",
+    );
+    tools.push(minRow);
+  }
+  const search = el("input", "mini-search");
+  search.type = "search";
+  search.placeholder = music ? "Filtrar artistas…" : "Filtrar canales…";
+  search.value = state.peopleQuery;
+  search.setAttribute(
+    "aria-label",
+    music ? "Filtrar artistas" : "Filtrar canales",
+  );
+  let dirTimer = null;
+  search.addEventListener("input", () => {
+    if (dirTimer) clearTimeout(dirTimer);
+    dirTimer = setTimeout(() => {
+      state.peopleQuery = search.value;
+      state.sigs = computeSigs();
+      refreshDirectory();
+    }, 180);
+  });
+  tools.push(search);
+  const dirPanel = panel({
+    iconName: music ? "mic" : "people",
+    title: music ? "Directorio de artistas" : "Directorio de canales",
+    span: 12,
+    tools,
+  });
+  const dirBody = el("div");
+  dirBody.id = "peopleDirectory";
+  dirPanel._body.append(dirBody);
+  host.append(dirPanel);
+  const rankPanel = panel({
+    iconName: "chart",
+    title: "Ranking",
+    sub: "por tiempo reproducido",
+    span: 12,
+  });
+  rankPanel._body.id = "peopleRanking";
+  host.append(rankPanel);
+  if (!music) {
+    const recentPanel = panel({
+      iconName: "eye",
+      title: "Últimas visitas a canales",
+      span: 12,
+    });
+    recentPanel._body.id = "peopleRecent";
+    host.append(recentPanel);
+  }
+  refreshDirectory();
+}
+function refreshDirectory() {
+  const dir = vmDirectory(),
+    music = isMusicScope();
+  const gridHost = document.getElementById("peopleDirectory");
+  const rankHost = document.getElementById("peopleRanking");
+  const recentHost = document.getElementById("peopleRecent");
+  if (!gridHost || !rankHost) return;
+  gridHost.replaceChildren();
+  if (!dir.list.length) {
+    gridHost.append(
+      emptyState(
+        music ? "mic" : "people",
+        "Ningún resultado con esos filtros. Probá otro orden o limpiá la búsqueda.",
+        ghostBtn("Limpiar filtros", "refresh", () => {
+          state.peopleQuery = "";
+          state.peopleMinSec = 0;
+          localStorage.setItem("recapPeopleMin", "0");
+          state.sigs = computeSigs();
+          renderPeople();
+          hydrateShelves();
+        }),
       ),
     );
-    rb.append(rt, rul);
-    host.append(rb);
+  } else {
+    gridHost.append(
+      directoryGrid(dir.list, (a) =>
+        personTile({
+          name: a.name,
+          artwork: music ? a.artwork : a.avatar,
+          meta:
+            a.seconds > 0 ? formatDuration(a.seconds) : `${a.visits} visitas`,
+          sub: music
+            ? `${a.plays} rep.${a.albums ? ` · ${a.albums} álbumes` : ""}`
+            : `${a.plays} rep. · ${a.visits} visitas`,
+          onOpen: () => navigate(state.scope, "people", a.name),
+          onPlay: () =>
+            playIds(
+              aggregateTracks(
+                periodPlays().filter(
+                  (p) =>
+                    (p.artist || "").toLowerCase() === a.name.toLowerCase(),
+                ),
+              ).map((t) => t.videoId),
+              a.name,
+            ),
+        }),
+      ),
+    );
+  }
+  rankHost.replaceChildren();
+  const ranked = dir.list.slice(0, 25);
+  if (!ranked.length)
+    rankHost.append(
+      emptyState("chart", "Sin datos para el ranking con estos filtros."),
+    );
+  else {
+    const list = el("div", "pt");
+    const maxSec = Math.max(1, dir.list[0]?.seconds || 1);
+    ranked.forEach((a, i) =>
+      list.append(
+        rankRow({
+          rank: i + 1,
+          medal: i < 3 ? i + 1 : null,
+          thumb: music ? a.artwork : a.avatar,
+          round: true,
+          name: a.name,
+          sub: music
+            ? `${a.plays} rep.${a.likes ? ` · ${a.likes} ❤` : ""}`
+            : `${a.visits} visitas · ${a.plays} rep.`,
+          value: a.seconds > 0 ? formatDuration(a.seconds) : `${a.visits}x`,
+          pct: a.seconds > 0 ? Math.round((a.seconds / maxSec) * 100) : 0,
+          onOpen: () => navigate(state.scope, "people", a.name),
+        }),
+      ),
+    );
+    rankHost.append(list);
+  }
+  if (recentHost) {
+    recentHost.replaceChildren();
+    const recent = dir.recent || [];
+    if (!recent.length)
+      recentHost.append(
+        emptyState("eye", "Todavía no registraste visitas directas a canales."),
+      );
+    else {
+      const list = el("div", "pt");
+      recent.forEach((v, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: v.avatar,
+            round: true,
+            name: v.name,
+            sub: `${v.source === "yt_music" ? "YT Music" : "YouTube"} · ${relativeTime(v.timestamp)}`,
+            value: "Abrir ↗",
+            href: v.url,
+          }),
+        ),
+      );
+      recentHost.append(list);
+    }
+  }
+}
+function renderPersonDetail(host, name) {
+  const music = isMusicScope();
+  const detail = music
+    ? memoVM(`artistDetail:${name}`, () =>
+        artistDetailVM(name, allPlays(), metaAll(store.interactions)),
+      )
+    : memoVM(`channelDetail:${name}`, () =>
+        channelDetailVM(name, allPlays(), metaAll(store.channelVisits)),
+      );
+  const bar = el("div", "detail-bar");
+  bar.append(
+    ghostBtn(
+      music ? "Volver a artistas" : "Volver a canales",
+      "arrowLeft",
+      () => navigate(state.scope, "people"),
+    ),
+  );
+  host.append(bar);
+  if (!detail || (detail.plays === 0 && (detail.visits || 0) === 0)) {
+    host.append(
+      emptyState(
+        "alert",
+        `No encontramos actividad de «${name}» en este scope.`,
+      ),
+    );
+    return;
+  }
+  const avatar = el("div", "detail-avatar");
+  const art = music ? detail.artwork : detail.avatar;
+  if (art) {
+    const img = el("img");
+    img.src = art;
+    img.alt = "";
+    attachImgFallback(img, detail.name);
+    avatar.append(img);
+  } else avatar.append(createMonogram(detail.name));
+  const kpis = music
+    ? [
+        kpiCard({
+          iconName: "clock",
+          label: "Tiempo escuchado",
+          value: formatDuration(detail.seconds),
+        }),
+        kpiCard({
+          iconName: "playCircle",
+          label: "Reproducciones",
+          value: String(detail.plays),
+        }),
+        kpiCard({
+          iconName: "disc",
+          label: "Álbumes",
+          value: String(detail.albums.length),
+        }),
+        kpiCard({
+          iconName: "heart",
+          label: "Me gusta",
+          value: String(detail.likes.length),
+        }),
+      ]
+    : [
+        kpiCard({
+          iconName: "clock",
+          label: "Tiempo reproducido",
+          value: formatDuration(detail.seconds),
+        }),
+        kpiCard({
+          iconName: "playCircle",
+          label: "Reproducciones",
+          value: String(detail.plays),
+        }),
+        kpiCard({
+          iconName: "eye",
+          label: "Visitas al canal",
+          value: String(detail.visits),
+        }),
+        kpiCard({
+          iconName: "bolt",
+          label: "Shorts",
+          value: String(detail.shorts.length),
+        }),
+      ];
+  host.append(
+    pageHero({
+      eyebrow: music ? "Artista" : "Canal",
+      title: detail.name,
+      desc: `Historial completo de ${scopeName()} · última actividad ${relativeTime(detail.lastTs || detail.recentVisits?.[0]?.timestamp || Date.now())}.`,
+      cover: avatar,
+      actions: [
+        primaryBtn("Playlist de sus top", "play", () =>
+          playIds(detail.ids, detail.name),
+        ),
+        detail.url
+          ? ghostBtn("Abrir en YouTube", "jump", () => openUrl(detail.url))
+          : null,
+      ].filter(Boolean),
+      kpis,
+    }),
+  );
+  if (detail.topTracks.length) {
+    const p = panel({
+      iconName: "playCircle",
+      title: "Top temas / videos",
+      sub: `${detail.topTracks.length} títulos`,
+      span: 12,
+    });
+    p._body.append(trackTable(detail.topTracks, { showBar: true }));
+    host.append(p);
+  }
+  if (music && detail.albums.length)
+    host.append(
+      shelf({
+        title: "Álbumes",
+        cardsFactory: () =>
+          detail.albums.map((a) =>
+            makeCard({
+              artwork: a.artwork,
+              title: a.album,
+              sub: a.artist,
+              name: a.artist,
+              stat: `${a.plays}x · ${formatDuration(a.seconds)}`,
+            }),
+          ),
+      }),
+    );
+  if (!music && detail.shorts.length)
+    host.append(
+      shelf({
+        title: "Shorts",
+        cardsFactory: () => sessionCards(detail.shorts),
+      }),
+    );
+  if (!music && detail.lives.length)
+    host.append(
+      shelf({
+        title: "Directos",
+        cardsFactory: () => sessionCards(detail.lives, true),
+      }),
+    );
+  if (music && detail.months.length)
+    host.append(
+      shelf({
+        title: "Meses con este artista",
+        cardsFactory: () => monthCards(detail.months),
+      }),
+    );
+  if (music && detail.likes.length) {
+    const p = panel({
+      iconName: "heart",
+      title: "Me gusta de este artista",
+      span: 12,
+    });
+    const list = el("div", "pt");
+    detail.likes
+      .slice(0, 20)
+      .forEach((it, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: it.artwork,
+            name: it.title,
+            sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
+            value: "Abrir ↗",
+            href: it.videoUrl,
+          }),
+        ),
+      );
+    p._body.append(list);
+    host.append(p);
+  }
+  if (!music && detail.recentVisits.length) {
+    const p = panel({ iconName: "eye", title: "Visitas al canal", span: 12 });
+    const list = el("div", "pt");
+    detail.recentVisits.forEach((v, i) =>
+      list.append(
+        rankRow({
+          rank: i + 1,
+          thumb: v.avatar,
+          round: true,
+          name: detail.name,
+          sub: relativeTime(v.timestamp),
+          value: "Abrir ↗",
+          href: v.url,
+        }),
+      ),
+    );
+    p._body.append(list);
+    host.append(p);
   }
 }
 
+// ---------- LIKES ----------
 function renderLikes() {
-  const vm = vmLikes();
+  const vm = vmLikesPage();
   const host = els.routes.likes;
   host.replaceChildren();
-  host.append(routeTitle("Likes y actividad"));
-  const stats = document.createElement("div");
-  stats.className = "explore-grid";
-  stats.append(
-    statCard("Me gusta", `❤️ ${vm.likes.length}`),
-    statCard("Suscripciones", `🔔 ${vm.subs.length}`),
-    statCard("Búsquedas", `🔍 ${vm.searches.length}`),
-  );
-  host.append(stats);
-  const mk = (title, items, renderer, empty) => {
-    const box = document.createElement("div");
-    box.className = "explore-box";
-    const t = document.createElement("h3");
-    t.textContent = title;
-    box.append(t);
-    if (items.length === 0) box.append(emptyBox(empty));
-    else {
-      const ul = document.createElement("ul");
-      ul.className = "top-list";
-      ul.append(...items.slice(0, 30).map(renderer));
-      box.append(ul);
+  const cover = el("div", "hero-cover");
+  if (vm.collage.length >= 4) {
+    for (const src of vm.collage.slice(0, 4)) {
+      const img = el("img");
+      img.src = src;
+      img.alt = "";
+      img.loading = "lazy";
+      attachImgFallback(img, "Liked");
+      cover.append(img);
     }
-    return box;
-  };
-  const cols = document.createElement("div");
-  cols.className = "likes-cols";
-  cols.append(
-    mk(
-      "Me gusta",
-      vm.likes,
-      renderInteractionRow,
-      "Todavía no diste Me gusta en este período.",
-    ),
-    mk(
-      "Suscripciones",
-      vm.subs,
-      renderInteractionRow,
-      "Sin suscripciones nuevas en este período.",
-    ),
-  );
-  host.append(cols);
+  } else {
+    const solo = el("span", "cover-solo");
+    solo.innerHTML = icon("heartFill", 48);
+    cover.append(solo);
+  }
+  const oldestDays = vm.oldest
+    ? Math.floor((Date.now() - vm.oldest) / 86400000)
+    : null;
   host.append(
-    mk(
-      "Búsquedas",
-      vm.searches,
-      renderSearchRow,
-      "Sin búsquedas registradas en este período.",
-    ),
+    pageHero({
+      eyebrow: `${scopeName()} · ${periodLabel()}`,
+      title: isMusicScope() ? "Liked Music" : "Me gusta (videos)",
+      desc: `${vm.totals.likes} me gusta · ${formatDuration(vm.totals.seconds)} escuchados de esos temas · ${vm.totals.subs} suscripciones nuevas.`,
+      cover,
+      actions: [
+        primaryBtn("Reproducir todo", "play", () =>
+          playIds(vm.ids, "tus me gusta"),
+        ),
+        ghostBtn("Ver artistas/canales", "people", () =>
+          navigate(state.scope, "people"),
+        ),
+      ],
+      insight:
+        oldestDays != null
+          ? {
+              icon: "clock",
+              text: `Tu like más viejo del período tiene <strong>${oldestDays} ${oldestDays === 1 ? "día" : "días"}</strong>.`,
+            }
+          : null,
+      kpis: [
+        kpiCard({
+          iconName: "heart",
+          label: "Me gusta",
+          value: String(vm.totals.likes),
+        }),
+        kpiCard({
+          key: "likedSeconds",
+          iconName: "clock",
+          label: "Tiempo de esos temas",
+          value: formatDuration(vm.totals.seconds),
+        }),
+        kpiCard({
+          iconName: "bell",
+          label: "Suscripciones",
+          value: String(vm.totals.subs),
+        }),
+        kpiCard({
+          iconName: "search",
+          label: "Búsquedas únicas",
+          value: String(vm.totals.groups),
+        }),
+      ],
+    }),
   );
+  const tabs = [
+    { value: "likes", label: `Me gusta (${vm.totals.likes})`, icon: "heart" },
+    { value: "subs", label: `Suscripciones (${vm.totals.subs})`, icon: "bell" },
+    {
+      value: "searches",
+      label: `Búsquedas (${vm.totals.groups})`,
+      icon: "search",
+    },
+  ];
+  const tabRow = pillRow(
+    tabs,
+    state.likesTab,
+    (v) => {
+      state.likesTab = v;
+      localStorage.setItem("recapLikesTab", v);
+      setPills(tabRow, v);
+      paintLikesBody();
+    },
+    "Secciones de likes",
+  );
+  host.append(tabRow);
+  const body = el("div");
+  body.id = "likesBody";
+  host.append(body);
+  paintLikesBody();
+}
+function paintLikesBody() {
+  const vm = vmLikesPage();
+  const body = document.getElementById("likesBody");
+  if (!body) return;
+  body.replaceChildren();
+  if (state.likesTab === "likes") {
+    const grid = el("div", "route-grid");
+    const main = panel({
+      iconName: "heart",
+      title: "Temas con Me gusta",
+      sub: `${vm.likes.length} en el período`,
+      span: 8,
+    });
+    if (!vm.likes.length)
+      main._body.append(
+        emptyState(
+          "heart",
+          "Todavía no diste Me gusta en este período. Dale like a un tema en YouTube o YT Music y aparece acá.",
+        ),
+      );
+    else {
+      const list = el("div", "pt");
+      vm.likes.forEach((it, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            medal: i < 3 ? i + 1 : null,
+            thumb: it.artwork,
+            name: it.title,
+            sub: `${it.artist} · ${relativeTime(it.timestamp)}`,
+            tag:
+              translateCategory(it.category) ||
+              (it.source === "yt_music" ? "YT Music" : ""),
+            value: "Abrir ↗",
+            href: it.videoUrl,
+          }),
+        ),
+      );
+      main._body.append(list);
+    }
+    grid.append(main);
+    const rail = panel({
+      iconName: "bell",
+      title: "Suscripciones nuevas",
+      sub: `${vm.subs.length}`,
+      span: 4,
+    });
+    if (!vm.subs.length)
+      rail._body.append(
+        emptyState("bell", "Sin suscripciones nuevas en este período."),
+      );
+    else {
+      const list = el("div", "pt");
+      vm.subs
+        .slice(0, 8)
+        .forEach((it, i) =>
+          list.append(
+            rankRow({
+              rank: i + 1,
+              thumb: it.artwork,
+              round: true,
+              name: it.title,
+              sub: relativeTime(it.timestamp),
+              value: "Canal ↗",
+              href: it.channelUrl,
+            }),
+          ),
+        );
+      rail._body.append(list);
+    }
+    grid.append(rail);
+    body.append(grid);
+    return;
+  }
+  if (state.likesTab === "subs") {
+    const p = panel({
+      iconName: "bell",
+      title: "Canales a los que te suscribiste",
+      sub: `${vm.subs.length} en el período`,
+      span: 12,
+    });
+    if (!vm.subs.length)
+      p._body.append(
+        emptyState(
+          "bell",
+          "Todavía no registraste suscripciones nuevas en este período.",
+        ),
+      );
+    else
+      p._body.append(
+        directoryGrid(vm.subs, (it) =>
+          personTile({
+            name: it.title,
+            artwork: it.artwork,
+            meta: relativeTime(it.timestamp),
+            sub: it.source === "yt_music" ? "YT Music" : "YouTube",
+            onOpen: () => openUrl(it.channelUrl),
+          }),
+        ),
+      );
+    body.append(p);
+    return;
+  }
+  const p = panel({
+    iconName: "search",
+    title: "Búsquedas agrupadas",
+    sub: `${vm.totals.groups} únicas · ${vm.totals.searches} eventos`,
+    span: 12,
+  });
+  if (!vm.searchGroups.length)
+    p._body.append(
+      emptyState("search", "Sin búsquedas registradas en este período."),
+    );
+  else {
+    const grid = el("div", "query-grid");
+    for (const g of vm.searchGroups) {
+      const card = el("button", "query-card");
+      card.type = "button";
+      const ico = el("span", "query-ico");
+      ico.innerHTML = icon("search", 16);
+      const m = el("div", "query-meta");
+      m.append(
+        el("div", "query-text", g.query),
+        el(
+          "div",
+          "query-sub",
+          `${g.source === "yt_music" ? "YT Music" : "YouTube"} · ${relativeTime(g.lastTs)}`,
+        ),
+      );
+      card.append(ico, m, el("span", "query-count", `×${g.count}`));
+      card.title = `Repetir búsqueda: ${g.query}`;
+      card.addEventListener("click", () => openUrl(g.url));
+      grid.append(card);
+    }
+    p._body.append(grid);
+  }
+  body.append(p);
 }
 
+// ---------- RESULTADOS ----------
 function renderResults() {
   const host = els.routes.results;
   host.replaceChildren();
   const vm = searchVM(state.q, scopeValue(), store);
+  const h = el(
+    "h2",
+    "route-title",
+    state.q ? `Resultados para «${state.q}»` : "Resultados",
+  );
+  h.tabIndex = -1;
+  host.append(h);
   if (!vm) {
     host.append(
-      routeTitle("Resultados"),
-      emptyBox("Escribí algo en el buscador para ver resultados."),
+      emptyState("search", "Escribí algo en el buscador para ver resultados."),
     );
     return;
   }
@@ -1511,10 +3009,12 @@ function renderResults() {
     vm.artists.length +
     vm.channels.length +
     vm.searches.length;
-  host.append(routeTitle(`Resultados para «${state.q}»`));
-  if (total === 0) {
+  if (!total) {
     host.append(
-      emptyBox(`Sin resultados para «${state.q}» en ${scopeName()}.`),
+      emptyState(
+        "search",
+        `Sin resultados para «${state.q}» en ${scopeName()}.`,
+      ),
     );
     return;
   }
@@ -1522,7 +3022,7 @@ function renderResults() {
     host.append(
       shelf({
         title: "Temas y videos",
-        cardsFactory: () => trackCards(vm.tracks, state.scope !== "music"),
+        cardsFactory: () => trackCards(vm.tracks, !isMusicScope()),
       }),
     );
   if (vm.artists.length)
@@ -1565,13 +3065,24 @@ function renderResults() {
     );
 }
 
+// ---------- render root ----------
+function markEntrance(host) {
+  [...host.children].forEach((n, i) => {
+    n.classList.add("enter");
+    n.style.setProperty("--i", String(Math.min(i, 8)));
+  });
+}
 function renderRoute() {
+  cancelCountUps();
   for (const io of observers) io.disconnect();
   observers.clear();
   mountedRows.clear();
   pendingShelves.length = 0;
   hideTip();
   const savedTop = els.content.scrollTop;
+  const animate = state.animateNext;
+  state.animateNext = false;
+  ANIM = animate && !reduceMotion();
   for (const [key, node] of Object.entries(els.routes))
     node.hidden = key !== state.route;
   switch (state.route) {
@@ -1595,16 +3106,22 @@ function renderRoute() {
       break;
   }
   hydrateShelves();
+  if (animate && !reduceMotion()) markEntrance(els.routes[state.route]);
+  ANIM = false;
   els.content.scrollTop = savedTop;
-  if (state.lastRoute !== state.route || state.lastScope !== state.scope) {
+  if (
+    state.lastRoute !== state.route ||
+    state.lastScope !== state.scope ||
+    state.lastDetail !== state.detail
+  ) {
     els.content.scrollTop = 0;
     const heading = els.routes[state.route].querySelector(".route-title");
     if (heading) heading.focus({ preventScroll: true });
     state.lastRoute = state.route;
     state.lastScope = state.scope;
+    state.lastDetail = state.detail;
   }
 }
-
 function renderAll() {
   state.sigs = computeSigs();
   if (state.lastScope != null && state.lastScope !== state.scope) {
@@ -1616,21 +3133,16 @@ function renderAll() {
   renderRoute();
   renderPlayer();
 }
-
-// PATCH C: refresh por datos — rebuild solo si cambia la estructura;
-// si solo cambian métricas, actualización in-place sin tocar shelves/grilla.
 function refreshData() {
-  const sigs = computeSigs();
-  const prev = state.sigs;
+  const sigs = computeSigs(),
+    prev = state.sigs;
   state.sigs = sigs;
   if (!prev || prev.struct !== sigs.struct) {
     const top = els.content.scrollTop;
     renderShell();
     renderRoute();
     els.content.scrollTop = top;
-  } else if (prev.metrics !== sigs.metrics) {
-    updateMetricsInPlace();
-  }
+  } else if (prev.metrics !== sigs.metrics) updateMetricsInPlace();
 }
 
 // ---------- playerbar ----------
@@ -1717,53 +3229,46 @@ function renderPlayer() {
       : formatClock(np.currentTime);
   renderQueue(sel?.others || []);
 }
-
 function renderQueue(others) {
   if (els.queuePop.hidden) return;
-  const nodes = [];
-  const title = document.createElement("div");
-  title.className = "queue-title";
-  title.textContent = `Otras pestañas (${others.length})`;
-  nodes.push(title);
-  if (others.length === 0) {
-    const p = document.createElement("p");
-    p.className = "empty-msg small";
-    p.textContent = "No hay otras pestañas de YouTube abiertas.";
-    nodes.push(p);
-  }
+  const nodes = [el("div", "queue-title", `Otras pestañas (${others.length})`)];
+  if (!others.length)
+    nodes.push(
+      emptyState("queue", "No hay otras pestañas de YouTube abiertas."),
+    );
   for (const tab of others) {
-    const wrap = document.createElement("div");
-    wrap.className = "queue-item";
-    const btn = document.createElement("button");
+    const wrap = el("div", "queue-item");
+    const btn = el("button", "np-other-btn");
     btn.type = "button";
-    btn.className = "np-other-btn";
-    const st = document.createElement("span");
-    st.className = tab.paused ? "np-other-state" : "np-other-state playing";
+    const st = el(
+      "span",
+      tab.paused ? "np-other-state" : "np-other-state playing",
+    );
     st.innerHTML = icon(tab.paused ? "pause" : "play", 12);
-    const img = document.createElement("img");
-    img.className = "np-other-thumb";
+    const img = el("img", "np-other-thumb");
     if (tab.artwork) img.src = tab.artwork;
     img.alt = "";
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const t = document.createElement("div");
-    t.className = "np-other-title";
-    t.textContent = tab.title;
-    const s = document.createElement("div");
-    s.className = "np-other-sub";
-    s.textContent = `${tab.source === "yt_music" ? "YT Music" : tab.isMusic ? "YouTube · Música" : "YouTube"} · ${tab.artist}`;
-    meta.append(t, s);
-    const time = document.createElement("span");
-    time.className = "np-other-time";
-    time.textContent = formatClock(tab.currentTime);
-    btn.append(st, img, meta, time);
+    const m = el("div", "meta");
+    m.append(
+      el("div", "np-other-title", tab.title),
+      el(
+        "div",
+        "np-other-sub",
+        `${tab.source === "yt_music" ? "YT Music" : tab.isMusic ? "YouTube · Música" : "YouTube"} · ${tab.artist}`,
+      ),
+    );
+    btn.append(
+      st,
+      img,
+      m,
+      el("span", "np-other-time", formatClock(tab.currentTime)),
+    );
     btn.addEventListener("click", () => {
       state.pinnedNpTabId = tab.storageKey || tab.tabId;
       renderPlayer();
     });
-    const playBtn = document.createElement("button");
+    const playBtn = el("button", "queue-mini");
     playBtn.type = "button";
-    playBtn.className = "queue-mini";
     playBtn.title = tab.paused
       ? "Reproducir en esa pestaña"
       : "Pausar esa pestaña";
@@ -1771,11 +3276,11 @@ function renderQueue(others) {
     playBtn.addEventListener("click", () =>
       sendControl(tab.paused ? "play" : "pause", undefined, tab.tabId),
     );
-    const pinBtn = document.createElement("button");
+    const pinBtn = el(
+      "button",
+      `queue-mini${state.pinnedNpTabId === (tab.storageKey || tab.tabId) ? " on" : ""}`,
+    );
     pinBtn.type = "button";
-    pinBtn.className =
-      "queue-mini" +
-      (state.pinnedNpTabId === (tab.storageKey || tab.tabId) ? " on" : "");
     pinBtn.title = "Pinear como principal";
     pinBtn.innerHTML = icon("pin", 13);
     pinBtn.addEventListener("click", () => {
@@ -1783,9 +3288,8 @@ function renderQueue(others) {
       state.pinnedNpTabId = state.pinnedNpTabId === key ? null : key;
       renderPlayer();
     });
-    const jumpBtn = document.createElement("button");
+    const jumpBtn = el("button", "queue-mini");
     jumpBtn.type = "button";
-    jumpBtn.className = "queue-mini";
     jumpBtn.title = "Ir a esa pestaña";
     jumpBtn.innerHTML = icon("jump", 13);
     jumpBtn.addEventListener("click", () => jumpToTab(tab.tabId));
@@ -1806,15 +3310,10 @@ function setSearchIndex(idx) {
   if (nodes[idx]) nodes[idx].scrollIntoView({ block: "nearest" });
 }
 function renderSearchDrop(q) {
-  const nodes = [];
-  const scopeLine = document.createElement("div");
-  scopeLine.className = "search-scope";
-  scopeLine.textContent = `Buscando en ${scopeName()}`;
-  nodes.push(scopeLine);
-
+  const nodes = [el("div", "search-scope", `Buscando en ${scopeName()}`)];
   if (!q) {
-    const recent = [];
-    const seen = new Set();
+    const recent = [],
+      seen = new Set();
     for (const s of [...store.searches].sort(
       (a, b) => b.timestamp - a.timestamp,
     )) {
@@ -1827,24 +3326,17 @@ function renderSearchDrop(q) {
       recent.push(s);
       if (recent.length >= 8) break;
     }
-    const t = document.createElement("div");
-    t.className = "search-group-title";
-    t.textContent = "Búsquedas recientes";
-    nodes.push(t);
-    if (recent.length === 0) {
-      const p = document.createElement("p");
-      p.className = "empty-msg small";
-      p.textContent = "Sin búsquedas recientes en esta página.";
-      nodes.push(p);
-    } else {
-      const chips = document.createElement("div");
-      chips.className = "search-chips";
+    nodes.append(el("div", "search-group-title", "Búsquedas recientes"));
+    if (!recent.length)
+      nodes.push(
+        emptyState("search", "Sin búsquedas recientes en esta página."),
+      );
+    else {
+      const chips = el("div", "search-chips");
       chips.append(
         ...recent.map((s) => {
-          const c = document.createElement("button");
+          const c = el("button", "search-chip", s.query);
           c.type = "button";
-          c.className = "search-chip";
-          c.textContent = s.query;
           c.addEventListener("click", () => {
             els.globalSearch.value = s.query;
             state.q = s.query;
@@ -1861,18 +3353,14 @@ function renderSearchDrop(q) {
     const vm = searchVM(q, scopeValue(), store);
     const group = (title, items, make) => {
       if (!items.length) return;
-      const t = document.createElement("div");
-      t.className = "search-group-title";
-      t.textContent = title;
-      nodes.push(t);
+      nodes.append(el("div", "search-group-title", title));
       nodes.push(...items.map(make));
     };
     const hit = (artwork, name, title, sub, onOpen) => {
-      const b = document.createElement("button");
+      const b = el("button", "search-hit");
       b.type = "button";
-      b.className = "search-hit";
       if (artwork) {
-        const img = document.createElement("img");
+        const img = el("img");
         img.src = artwork;
         img.alt = "";
         attachImgFallback(img, name);
@@ -1885,16 +3373,11 @@ function renderSearchDrop(q) {
         mono.style.fontSize = "12px";
         b.append(mono);
       }
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      const t = document.createElement("div");
-      t.className = "t";
+      const m = el("div", "meta");
+      const t = el("div", "t");
       t.append(highlight(title, q));
-      const s = document.createElement("div");
-      s.className = "s";
-      s.textContent = sub;
-      meta.append(t, s);
-      b.append(meta);
+      m.append(t, el("div", "s", sub));
+      b.append(m);
       b.addEventListener("click", () => {
         els.searchDrop.hidden = true;
         els.globalSearch.setAttribute("aria-expanded", "false");
@@ -1906,10 +3389,14 @@ function renderSearchDrop(q) {
       hit(t.artwork, t.artist, t.title, t.artist, () => openUrl(t.videoUrl)),
     );
     group("Artistas", vm.artists.slice(0, 3), (a) =>
-      hit(a.artwork, a.name, a.name, `${a.plays} rep.`, () => openUrl(a.url)),
+      hit(a.artwork, a.name, a.name, `${a.plays} rep.`, () =>
+        navigate(state.scope, "people", a.name),
+      ),
     );
     group("Canales", vm.channels.slice(0, 3), (v) =>
-      hit(v.avatar, v.name, v.name, "Canal visitado", () => openUrl(v.url)),
+      hit(v.avatar, v.name, v.name, "Canal visitado", () =>
+        navigate(state.scope, "people", v.name),
+      ),
     );
     group("Búsquedas", vm.searches.slice(0, 3), (s) =>
       hit(
@@ -1920,16 +3407,11 @@ function renderSearchDrop(q) {
         () => openUrl(s.url),
       ),
     );
-    if (nodes.length === 1) {
-      const p = document.createElement("p");
-      p.className = "empty-msg small";
-      p.textContent = "Sin coincidencias.";
-      nodes.push(p);
-    }
-    const hint = document.createElement("div");
-    hint.className = "search-kbd-hint";
-    hint.textContent = "↑/↓ navegar · Enter abrir · Esc cerrar";
-    nodes.push(hint);
+    if (nodes.length === 1)
+      nodes.push(emptyState("search", "Sin coincidencias."));
+    nodes.append(
+      el("div", "search-kbd-hint", "↑/↓ navegar · Enter abrir · Esc cerrar"),
+    );
   }
   els.searchDrop.replaceChildren(...nodes);
   els.searchDrop.hidden = false;
@@ -1937,7 +3419,7 @@ function renderSearchDrop(q) {
   state.searchIndex = -1;
 }
 
-// ---------- miniplayer drag ----------
+// ---------- miniplayer ----------
 function applyMiniPos() {
   try {
     const raw = localStorage.getItem("recapMiniPos");
@@ -1949,13 +3431,13 @@ function applyMiniPos() {
       els.miniplayer.style.top = `${Math.min(Math.max(8, y), innerHeight - 260)}px`;
     }
   } catch {
-    // Ignorar
+    /* ignorar */
   }
 }
 function initMiniDrag() {
-  let dragging = false;
-  let offX = 0;
-  let offY = 0;
+  let dragging = false,
+    offX = 0,
+    offY = 0;
   els.mpHead.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button")) return;
     dragging = true;
@@ -1967,10 +3449,8 @@ function initMiniDrag() {
   });
   els.mpHead.addEventListener("pointermove", (e) => {
     if (!dragging) return;
-    const x = Math.min(Math.max(8, e.clientX - offX), innerWidth - 310);
-    const y = Math.min(Math.max(8, e.clientY - offY), innerHeight - 260);
-    els.miniplayer.style.left = `${x}px`;
-    els.miniplayer.style.top = `${y}px`;
+    els.miniplayer.style.left = `${Math.min(Math.max(8, e.clientX - offX), innerWidth - 310)}px`;
+    els.miniplayer.style.top = `${Math.min(Math.max(8, e.clientY - offY), innerHeight - 260)}px`;
   });
   const end = () => {
     if (!dragging) return;
@@ -1985,26 +3465,70 @@ function initMiniDrag() {
   els.mpHead.addEventListener("pointercancel", end);
 }
 
+// ---------- calendario ----------
+function structureCalendar() {
+  const monthView = domCal.calMonthView;
+  const main = el("div", "cal-main"),
+    rail = el("div", "cal-rail");
+  const dayPanel = domCal.calDayList.closest(".cal-section");
+  const topPanel = domCal.calMonthTopList.closest(".cal-section");
+  const weeksPanel = domCal.calWeeksList.closest(".cal-section");
+  for (const n of [...monthView.children]) {
+    if (n === domCal.calMonthStatsBox || n === dayPanel) rail.append(n);
+    else main.append(n);
+  }
+  monthView.append(main, rail);
+  rail.prepend(domCal.calMonthStatsBox);
+  main.append(
+    ...[
+      monthView.querySelector(".calendar-box"),
+      topPanel,
+      domCal.calMonthChannelsBox,
+      domCal.calMonthCatsBox,
+      domCal.calWeekdayBox,
+      domCal.calMonthSocialBox,
+      weeksPanel,
+    ].filter(Boolean),
+  );
+}
+function initCalendarTooltips() {
+  const sel = ".cal-day, .yr-cell, .wd-col";
+  els.calHost.addEventListener("mouseover", (e) => {
+    const t = e.target.closest(sel);
+    if (!t) return;
+    const title = t.getAttribute("title");
+    if (title) {
+      t.dataset.tip = title;
+      t.removeAttribute("title");
+    }
+    if (t.dataset.tip) showTip(t.dataset.tip, e.clientX, e.clientY);
+  });
+  els.calHost.addEventListener("mousemove", (e) => {
+    const t = e.target.closest(sel);
+    if (t?.dataset.tip) showTip(t.dataset.tip, e.clientX, e.clientY);
+  });
+  els.calHost.addEventListener("mouseout", (e) => {
+    if (e.target.closest(sel)) hideTip();
+  });
+}
+
 // ---------- eventos ----------
 els.brandBtn.addEventListener("click", () => {
   const next = state.scope === "music" ? "youtube" : "music";
   navigate(next, state.perScopeRoute[next] || "home");
   toast(next === "music" ? "Página Music" : "Página YouTube sin música");
 });
-els.sideNav.querySelectorAll(".side-link").forEach((b) => {
-  b.addEventListener("click", () => navigate(state.scope, b.dataset.route));
-});
-els.newPlaylistBtn.addEventListener("click", () => {
-  const ids = aggregateTracks(periodPlays())
-    .map((t) => t.videoId)
-    .filter(Boolean)
-    .slice(0, 50);
-  if (ids.length === 0) {
-    toast("No hay reproducciones con videoId en este período.");
-    return;
-  }
-  openInstantPlaylist(ids);
-});
+els.sideNav
+  .querySelectorAll(".side-link")
+  .forEach((b) =>
+    b.addEventListener("click", () => navigate(state.scope, b.dataset.route)),
+  );
+els.newPlaylistBtn.addEventListener("click", () =>
+  playIds(
+    aggregateTracks(periodPlays()).map((t) => t.videoId),
+    "este período",
+  ),
+);
 
 let searchTimer = null;
 els.globalSearch.addEventListener("input", () => {
@@ -2018,7 +3542,6 @@ els.globalSearch.addEventListener("focus", () => {
   if (!els.globalSearch.value.trim()) renderSearchDrop("");
 });
 els.globalSearch.addEventListener("keydown", (e) => {
-  const nodes = searchHitNodes();
   if (e.key === "ArrowDown") {
     e.preventDefault();
     if (els.searchDrop.hidden) renderSearchDrop(els.globalSearch.value.trim());
@@ -2053,7 +3576,6 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#helpPop") && !e.target.closest("#helpBtn"))
     els.helpPop.hidden = true;
 });
-
 document.addEventListener("keydown", (e) => {
   const typing = /^(input|textarea|select)$/i.test(e.target.tagName);
   if (e.key === "Escape") {
@@ -2091,9 +3613,10 @@ document.addEventListener("keydown", (e) => {
         );
       break;
     case "m":
+      sendControl("mute");
+      break;
     case "M":
-      if (e.shiftKey) els.brandBtn.click();
-      else sendControl("mute");
+      els.brandBtn.click();
       break;
     case "n":
     case "N":
@@ -2114,7 +3637,6 @@ document.addEventListener("keydown", (e) => {
       break;
   }
 });
-
 els.pbPlay.addEventListener("click", () => {
   if (!state.currentNp) return toast("No hay nada reproduciéndose.");
   sendControl(state.currentNp.paused ? "play" : "pause");
@@ -2136,16 +3658,13 @@ els.pbJump.addEventListener("click", () => {
 });
 els.mpJump.addEventListener("click", () => els.pbJump.click());
 els.mpThumb.addEventListener("dblclick", () => els.pbJump.click());
-
 els.pbSeek.addEventListener("input", () => {
   state.seeking = true;
-  const np = state.currentNp;
-  const pct = Number(els.pbSeek.value) / 10;
+  const np = state.currentNp,
+    pct = Number(els.pbSeek.value) / 10;
   els.pbSeek.style.setProperty("--pb-fill", `${pct}%`);
-  if (np?.duration > 0) {
-    const secs = (Number(els.pbSeek.value) / 1000) * np.duration;
-    els.pbTime.textContent = `${formatClock(secs)} / ${formatClock(np.duration)}`;
-  }
+  if (np?.duration > 0)
+    els.pbTime.textContent = `${formatClock((Number(els.pbSeek.value) / 1000) * np.duration)} / ${formatClock(np.duration)}`;
 });
 els.pbSeek.addEventListener("change", () => {
   const np = state.currentNp;
@@ -2160,7 +3679,6 @@ els.pbVol.addEventListener("input", () => {
   if (volTimer) clearTimeout(volTimer);
   volTimer = setTimeout(() => sendControl("volume", v / 100), 120);
 });
-
 els.pbQueue.addEventListener("click", () => {
   const open = els.queuePop.hidden;
   els.queuePop.hidden = !open;
@@ -2184,7 +3702,6 @@ els.mpClose.addEventListener("click", () => {
 els.helpBtn.addEventListener("click", () => {
   els.helpPop.hidden = !els.helpPop.hidden;
 });
-
 els.importBtn.addEventListener("click", () => {
   if (urlParams.get("import") === "1")
     toast("Elegí tu archivo .zip o .json con el botón Importar.");
@@ -2198,6 +3715,7 @@ els.importInput.addEventListener("change", async (e) => {
     await chrome.storage.local.set(updatedData);
     Object.assign(store, updatedData);
     if (migrateMusicFlags(store)) await persistMusicFlags(store);
+    state.animateNext = true;
     renderAll();
     toast(message);
   } catch (err) {
@@ -2206,7 +3724,6 @@ els.importInput.addEventListener("change", async (e) => {
     els.importInput.value = "";
   }
 });
-
 els.exportBtn.addEventListener("click", async () => {
   const orig = els.exportBtn.innerHTML;
   els.exportBtn.disabled = true;
@@ -2236,7 +3753,6 @@ els.exportBtn.addEventListener("click", async () => {
     els.exportBtn.innerHTML = orig;
   }
 });
-
 els.enrichMusicBtn.addEventListener("click", async () => {
   const orig = els.enrichMusicBtn.textContent;
   els.enrichMusicBtn.disabled = true;
@@ -2250,6 +3766,7 @@ els.enrichMusicBtn.addEventListener("click", async () => {
     }
     if (res.updated > 0) {
       await persistMusicFlags(store);
+      state.animateNext = true;
       renderAll();
     }
     toast(
@@ -2264,7 +3781,6 @@ els.enrichMusicBtn.addEventListener("click", async () => {
     els.enrichMusicBtn.textContent = orig;
   }
 });
-
 els.clearBtn.addEventListener("click", () =>
   els.confirmClearDialog.showModal(),
 );
@@ -2279,16 +3795,14 @@ els.confirmClearBtn.addEventListener("click", async () => {
   const empty = emptyStore();
   await chrome.storage.local.set(empty);
   Object.assign(store, empty);
+  state.animateNext = true;
   renderAll();
   toast("✓ Historial local borrado.");
 });
-
 chrome.tabs.onRemoved.addListener((tabId) => {
   npService.removeTab(tabId);
   renderPlayer();
 });
-
-// PATCH C: debounce mayor (1200ms) + refresh granular por firmas.
 let dataTimer = null;
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
@@ -2302,14 +3816,11 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     dataTimer = setTimeout(refreshData, 1200);
   }
 });
-
 window.addEventListener("resize", () => {
   hideTip();
   mountedRows.forEach((fn) => fn());
   if (!els.miniplayer.hidden) applyMiniPos();
 });
-
-// ---------- PATCH C: cleanup explícito ----------
 let playerInterval = null;
 function cleanup() {
   if (playerInterval) clearInterval(playerInterval);
@@ -2318,6 +3829,7 @@ function cleanup() {
   if (volTimer) clearTimeout(volTimer);
   if (toastTimer) clearTimeout(toastTimer);
   if (toastGapTimer) clearTimeout(toastGapTimer);
+  cancelCountUps();
   for (const io of observers) io.disconnect();
   observers.clear();
   mountedRows.clear();
@@ -2330,44 +3842,42 @@ window.addEventListener("pagehide", cleanup);
 function skeletonHome() {
   const host = els.routes.home;
   host.replaceChildren();
-  const hero = document.createElement("div");
-  hero.className = "hero";
-  const l = document.createElement("div");
-  l.className = "skel-line";
+  const hero = el("div", "hero");
+  const l = el("div", "skel-line");
   l.style.width = "260px";
   l.style.height = "26px";
   hero.append(l);
   host.append(hero);
   for (let i = 0; i < 2; i++) {
-    const sec = document.createElement("section");
-    sec.className = "shelf";
-    const row = document.createElement("div");
-    row.className = "shelf-row";
+    const sec = el("section", "shelf");
+    const row = el("div", "shelf-row");
     row.append(...skeletonRow());
     sec.append(row);
     host.append(sec);
   }
 }
-
 async function init() {
   mountIcons(document);
   skeletonHome();
   els.calHost.innerHTML = CALENDAR_MARKUP;
   domCal = {};
   for (const id of CALENDAR_DOM_IDS) domCal[id] = $(id);
-  bindCalendarControls(domCal, calUi, renderCalendarRoute);
+  structureCalendar();
+  bindCalendarControls(domCal, calUi, () => {
+    state.sigs = computeSigs();
+    renderCalendarRoute();
+  });
   domCal.calMonthImgBtn.addEventListener("click", () =>
     exportPngCard(calUi.monthCardData, domCal.calMonthImgBtn),
   );
   domCal.calMonthPlaylistBtn.addEventListener("click", () =>
     openInstantPlaylist(calUi.monthTopVideoIds),
   );
+  initCalendarTooltips();
   initMiniDrag();
-
   parseHash();
   if (!location.hash)
     location.hash = `#/${state.scope}/${state.perScopeRoute[state.scope] || "home"}`;
-
   const [{ store: loaded, all }] = await Promise.all([
     loadStore(),
     npService.sync(),
@@ -2385,15 +3895,11 @@ async function init() {
   }
   const stale = npService.loadInitial(all);
   if (stale.length) chrome.storage.local.remove(stale);
-
   renderAll();
   playerInterval = setInterval(renderPlayer, 3000);
-
-  if (urlParams.get("import") === "1") {
+  if (urlParams.get("import") === "1")
     toast(
       "Modo completo abierto: tocá «Importar» para elegir tu archivo .zip o .json.",
     );
-  }
 }
-
 init();

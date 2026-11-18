@@ -1,12 +1,10 @@
 {
   "manifest_version": 3,
   "name": "YouTube & YT Music Recap",
-  "version": "3.0",
+  "version": "2.7.0",
   "description": "Recaps en tiempo real de YouTube y YouTube Music con calendario, canales, likes, búsquedas y exportación ZIP/PNG.",
   "permissions": ["storage", "unlimitedStorage", "tabs", "scripting"],
-  "background": {
-    "service_worker": "src/background.js"
-  },
+  "background": { "service_worker": "src/background.js" },
   "host_permissions": [
     "https://music.youtube.com/*",
     "https://www.youtube.com/*",
@@ -21,8 +19,5 @@
       "run_at": "document_idle"
     }
   ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Ver mi Recap"
-  }
+  "action": { "default_popup": "popup.html", "default_title": "Ver mi Recap" }
 }

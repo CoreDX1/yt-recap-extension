@@ -45,8 +45,16 @@ const PATHS = {
   search:
     P("M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z") + P("M15.5 15.5L20 20"),
   home: P("M4 11l8-7 8 7") + P("M6 9.5V20h12V9.5"),
-  explore: P("M12 3l9 18H3z") + P("M12 10v5"),
+  explore:
+    P("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z") +
+    P("M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"),
   calendar: P("M4 6h16v14H4z") + P("M4 10h16") + P("M8 3v5") + P("M16 3v5"),
+  calendarCheck:
+    P("M4 6h16v14H4z") +
+    P("M4 10h16") +
+    P("M8 3v5") +
+    P("M16 3v5") +
+    P("M8.5 14.5l2.5 2.5 4.5-4.5"),
   people:
     P("M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8z") + P("M4.5 20a7.5 7.5 0 0 1 15 0"),
   heart: P(
@@ -59,6 +67,7 @@ const PATHS = {
   plus: P("M12 5v14") + P("M5 12h14"),
   chevronLeft: P("M14.5 5.5L8 12l6.5 6.5"),
   chevronRight: P("M9.5 5.5L16 12l-6.5 6.5"),
+  arrowLeft: P("M20 12H4") + P("M10 6l-6 6 6 6"),
   help:
     P("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z") +
     P("M9.6 9.2a2.6 2.6 0 1 1 3.6 2.4c-.8.4-1.2 1-1.2 1.9") +
@@ -93,6 +102,61 @@ const PATHS = {
   import: P("M12 4v11") + P("M8 11l4 4 4-4") + P("M4 19h16"),
   export: P("M12 15V4") + P("M8 8l4-4 4 4") + P("M4 19h16"),
   spark: P("M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"),
+  playCircle:
+    P("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z") +
+    P("M10 8.5l6 3.5-6 3.5z", 'fill="currentColor" stroke="none"'),
+  hash: P("M9 4L7 20") + P("M17 4l-2 16") + P("M4 9h16") + P("M3 15h16"),
+  flame:
+    P("M12 3s5 4.2 5 9a5 5 0 0 1-10 0c0-1.6.6-3 1.5-4.2C9.4 9.9 12 8 12 3z") +
+    P(
+      "M12 20a2.6 2.6 0 0 0 2.6-2.6c0-1.6-2.6-3.4-2.6-3.4s-2.6 1.8-2.6 3.4A2.6 2.6 0 0 0 12 20z",
+    ),
+  peak: P("M3 17l5-7 4 4 5-8") + P("M17 6h4v4"),
+  disc:
+    P("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z") +
+    P("M12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"),
+  video: P("M3 6.5h12v11H3z") + P("M15 10l6-3.5v11L15 14z"),
+  bolt: P("M13 2L4 14h6l-1 8 9-12h-6z"),
+  broadcast:
+    P("M12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4z") +
+    P("M7.8 7.8a6 6 0 0 0 0 8.4") +
+    P("M16.2 16.2a6 6 0 0 0 0-8.4") +
+    P("M4.9 4.9a10 10 0 0 0 0 14.2") +
+    P("M19.1 19.1a10 10 0 0 0 0-14.2"),
+  trophy:
+    P("M7 4h10v5a5 5 0 0 1-10 0z") +
+    P("M7 5H4v2a3 3 0 0 0 3 3") +
+    P("M17 5h3v2a3 3 0 0 1-3 3") +
+    P("M10 14h4l1 6H9z"),
+  filter: P("M3 5h18l-7 8v6l-4 2v-8z"),
+  grid:
+    P("M4 4h7v7H4z") +
+    P("M13 4h7v7h-7z") +
+    P("M4 13h7v7H4z") +
+    P("M13 13h7v7h-7z"),
+  list: P("M4 6h16") + P("M4 12h16") + P("M4 18h16"),
+  mic:
+    P("M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z") +
+    P("M5 11a7 7 0 0 0 14 0") +
+    P("M12 18v3"),
+  // v2.7
+  area:
+    P("M3 17l5-6 4 3 5-7 4 4v6H3z", 'fill="currentColor" stroke="none"') +
+    P("M3 17l5-6 4 3 5-7 4 4"),
+  compare: P("M4 5h9v9H4z") + P("M11 10h9v9h-9z"),
+  bulb:
+    P("M9 18h6") +
+    P("M10 21h4") +
+    P(
+      "M12 3a6 6 0 0 1 3.6 10.8c-.6.5-.6 1.2-.6 2.2H9c0-1 0-1.7-.6-2.2A6 6 0 0 1 12 3z",
+    ),
+  info:
+    P("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z") + P("M12 11v5") + P("M12 8h.01"),
+  moon: P("M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"),
+  target:
+    P("M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z") +
+    P("M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z") +
+    P("M12 11.5a.5.5 0 1 1 0 1 .5.5 0 0 1 0-1z"),
 };
 
 export function icon(name, size = 20, cls = "") {
@@ -102,8 +166,6 @@ export function icon(name, size = 20, cls = "") {
 
 export function mountIcons(root = document) {
   root.querySelectorAll("[data-icon]").forEach((el) => {
-    const name = el.dataset.icon;
-    const size = Number(el.dataset.size || 20);
-    el.innerHTML = icon(name, size);
+    el.innerHTML = icon(el.dataset.icon, Number(el.dataset.size || 20));
   });
 }
