@@ -1,3 +1,4 @@
+// src/popup.js
 import {
   translateCategory,
   toDateKey,
@@ -6,30 +7,46 @@ import {
   formatClock,
   formatDuration,
   formatShortDateTime,
-  computeStreak,
   matchesFilter,
   matchesPeriodAndSourceOnly,
-  aggregateTracks,
   getGroupKey,
   sanitizeFileSlug,
-  getExtFromMime,
   isMusicItem,
-  computeIsMusicFlag,
 } from "./utils.js";
-import { buildZipBlob, extractJsonFromZipBuffer } from "./zip.js";
-import { importBackupPayload } from "./takeout.js";
-import { renderRecapPngBlob } from "./cardRenderer.js";
+import {
+  buildTrackRow,
+  renderInteractionRow,
+  renderSearchRow,
+} from "./rows.js";
+import { CALENDAR_MARKUP } from "./calendarMarkup.js";
+import { bindCalendarControls } from "./calendarController.js";
+import {
+  loadStore,
+  migrateMusicFlags,
+  persistMusicFlags,
+  downloadBlob,
+  exportPngCard,
+  buildExportZip,
+  importFromFile,
+  enrichImported,
+  NowPlaying,
+  emptyStore,
+} from "./recapStore.js";
+import { summaryVM, activityVM, channelsVM, likesVM } from "./viewModels.js";
 import { renderCalendarView } from "./calendarView.js";
-
-const $ = (id) => document.getElementById(id);
 
 const urlParams = new URLSearchParams(location.search);
 const isFullMode = urlParams.get("full") === "1";
-if (isFullMode) document.body.classList.add("full-mode");
+if (isFullMode) {
+  // Legacy: el Bento fue reemplazado por la app de pestaña completa.
+  location.replace(chrome.runtime.getURL("full.html"));
+  await new Promise(() => {});
+}
 
-// Fase 5: enriquecimiento de importados sin categoría.
-const ENRICH_CONCURRENCY = 4;
-const ENRICH_MAX_PER_RUN = 200;
+// Fuente única del calendario (compartida con full.html).
+document.getElementById("tab-calendar").innerHTML = CALENDAR_MARKUP;
+
+const $ = (id) => document.getElementById(id);
 
 const dom = {
   periodSelect: $("periodSelect"),
@@ -44,7 +61,6 @@ const dom = {
   confirmClearDialog: $("confirmClearDialog"),
   cancelClearBtn: $("cancelClearBtn"),
   confirmClearBtn: $("confirmClearBtn"),
-
   npEmpty: $("npEmpty"),
   npContent: $("npContent"),
   npThumb: $("npThumb"),
@@ -61,7 +77,6 @@ const dom = {
   npOtherWrap: $("npOtherWrap"),
   npOtherHeader: $("npOtherHeader"),
   npOtherList: $("npOtherList"),
-
   totalTime: $("totalTime"),
   totalPlays: $("totalPlays"),
   totalLoops: $("totalLoops"),
@@ -72,10 +87,8 @@ const dom = {
   makePlaylistBtn: $("makePlaylistBtn"),
   topList: $("topList"),
   emptyMsg: $("emptyMsg"),
-
   recentList: $("recentList"),
   recentEmpty: $("recentEmpty"),
-
   categoriesBox: $("categoriesBox"),
   categoriesList: $("categoriesList"),
   hoursChart: $("hoursChart"),
@@ -87,7 +100,6 @@ const dom = {
   topArtistsList: $("topArtistsList"),
   skipsBox: $("skipsBox"),
   topSkipsList: $("topSkipsList"),
-
   calSearchInput: $("calSearchInput"),
   calSearchSummary: $("calSearchSummary"),
   calMonthView: $("calMonthView"),
@@ -129,7 +141,6 @@ const dom = {
   calYearHeatmapScroll: $("calYearHeatmapScroll"),
   calYearGrid: $("calYearGrid"),
   calYearMonthsGrid: $("calYearMonthsGrid"),
-
   chUniqueCount: $("chUniqueCount"),
   chTotalVisits: $("chTotalVisits"),
   chNewSubs: $("chNewSubs"),
@@ -139,7 +150,6 @@ const dom = {
   channelsEmpty: $("channelsEmpty"),
   channelsRecentList: $("channelsRecentList"),
   channelsRecentEmpty: $("channelsRecentEmpty"),
-
   lkTotalLikes: $("lkTotalLikes"),
   lkTotalSubs: $("lkTotalSubs"),
   lkTotalSearches: $("lkTotalSearches"),
@@ -150,8 +160,6 @@ const dom = {
   socialSearchesList: $("socialSearchesList"),
   socialSearchesEmpty: $("socialSearchesEmpty"),
 };
-
-if (isFullMode) dom.expandBtn.hidden = true;
 
 const nowInit = new Date();
 const uiState = {
@@ -180,16 +188,8 @@ const uiState = {
   monthCardData: null,
 };
 
-const store = {
-  history: [],
-  channelVisits: [],
-  skips: [],
-  interactions: [],
-  searches: [],
-};
-
-const npTabsMap = new Map();
-const openBrowserTabs = new Map();
+const store = emptyStore();
+const npService = new NowPlaying();
 
 let statusTimer = null;
 function showStatus(msg, isError = false) {
@@ -202,232 +202,44 @@ function showStatus(msg, isError = false) {
   }, 6000);
 }
 
-// --- FASE 3: MIGRACIÓN IDEMPOTENTE DE FLAGS DE MÚSICA ---
-// Marca isMusic en history (categoría Music / canal - Topic / plataforma YTM),
-// y hereda el flag en skips y likes por join de videoId/trackKey.
-// No toca búsquedas, visitas ni suscripciones (eventos de plataforma).
-function migrateMusicFlags(data) {
-  let changed = false;
-  const byVideo = new Map();
-  const byTrack = new Map();
-
-  for (const it of data.history) {
-    const flag =
-      it.source === "yt_music" ||
-      it.isMusic === true ||
-      computeIsMusicFlag(it.category, "", it.artist);
-    if (flag && it.isMusic !== true) {
-      it.isMusic = true;
-      changed = true;
-    }
-    if (it.isMusic) {
-      if (it.videoId) byVideo.set(it.videoId, true);
-      if (it.trackKey) byTrack.set(it.trackKey, true);
-    }
-  }
-
-  for (const sk of data.skips) {
-    const flag =
-      sk.isMusic === true ||
-      computeIsMusicFlag(sk.category, "", sk.artist) ||
-      (sk.videoId && byVideo.get(sk.videoId)) ||
-      (sk.trackKey && byTrack.get(sk.trackKey));
-    if (flag && sk.isMusic !== true) {
-      sk.isMusic = true;
-      changed = true;
-    }
-  }
-
-  for (const it of data.interactions) {
-    if (it.type !== "like") continue;
-    const flag =
-      it.isMusic === true ||
-      computeIsMusicFlag(it.category, "", it.artist) ||
-      (it.videoId && byVideo.get(it.videoId)) ||
-      (it.targetKey && byTrack.get(it.targetKey));
-    if (flag && it.isMusic !== true) {
-      it.isMusic = true;
-      changed = true;
-    }
-  }
-
-  return changed;
-}
-
-async function persistMusicFlags() {
-  await chrome.storage.local.set({
-    history: store.history,
-    skips: store.skips,
-    interactions: store.interactions,
-  });
-}
-
-// --- COMPONENTES DE FILA ---
-function buildTrackRow(
-  rankText,
-  artwork,
-  titleText,
-  subText,
-  rightText,
-  opts = {},
-) {
-  const li = document.createElement("li");
-  li.className = opts.href ? "top-item clickable" : "top-item";
-
-  const rank = document.createElement("span");
-  rank.className = "rank";
-  rank.textContent = rankText;
-
-  let img = null;
-  if (!opts.noThumb) {
-    img = document.createElement("img");
-    img.className = opts.avatar ? "thumb avatar" : "thumb";
-    if (artwork) img.src = artwork;
-    img.alt = "";
-  }
-
-  const meta = document.createElement("div");
-  meta.className = "meta";
-
-  const title = document.createElement("div");
-  title.className = "track-title";
-  title.textContent = titleText;
-
-  const sub = document.createElement("div");
-  sub.className = "track-sub";
-  sub.textContent = subText;
-
-  meta.append(title, sub);
-
-  if (opts.barPct > 0) {
-    const track = document.createElement("div");
-    track.className = "ch-bar-track";
-    const fill = document.createElement("div");
-    fill.className = "ch-bar-fill";
-    fill.style.width = `${Math.min(100, Math.max(3, opts.barPct))}%`;
-    track.append(fill);
-    meta.append(track);
-  }
-
-  const stats = document.createElement("div");
-  stats.className = "track-stats";
-  stats.textContent = rightText;
-
-  const children = img ? [rank, img, meta, stats] : [rank, meta, stats];
-
-  if (opts.href) {
-    const a = document.createElement("a");
-    a.className = "item-link";
-    a.href = opts.href;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.append(...children);
-    li.append(a);
-  } else {
-    li.append(...children);
-  }
-
-  return li;
-}
-
-function renderInteractionRow(it) {
-  const isLike = it.type === "like";
-  const cat =
-    isLike && it.category ? ` · ${translateCategory(it.category)}` : "";
-  return buildTrackRow(
-    isLike ? "❤️" : "🔔",
-    it.artwork,
-    it.title,
-    `${isLike ? it.artist : "Suscripción nueva"} · ${formatShortDateTime(it.timestamp)}${cat}`,
-    isLike ? "Abrir ↗" : "Canal ↗",
-    {
-      href: (isLike ? it.videoUrl : it.channelUrl) || undefined,
-      avatar: !isLike,
-    },
-  );
-}
-
-function renderSearchRow(s) {
-  const src = s.source === "yt_music" ? "YT Music" : "YouTube";
-  return buildTrackRow(
-    "🔍",
-    "",
-    s.query,
-    `${src} · ${formatShortDateTime(s.timestamp)}`,
-    "Buscar ↗",
-    {
-      href: s.url || undefined,
-      noThumb: true,
-    },
-  );
-}
-
-// --- TARJETA EN VIVO + VENTANAS REALES ABIERTAS ---
-async function syncOpenTabs() {
-  try {
-    const allTabs = await chrome.tabs.query({});
-    openBrowserTabs.clear();
-    for (const t of allTabs) {
-      const u = t.url || t.pendingUrl || "";
-      if (
-        u.startsWith("https://www.youtube.com/") ||
-        u.startsWith("https://music.youtube.com/")
-      ) {
-        openBrowserTabs.set(t.id, t);
-      }
-    }
-  } catch {
-    // Ignorar si no hay permiso tabs
-  }
-}
-
+// --- TARJETA EN VIVO ---
 function renderNowPlaying(np) {
   if (!np) {
     dom.npEmpty.hidden = false;
     dom.npContent.hidden = true;
     return;
   }
-
   dom.npEmpty.hidden = true;
   dom.npContent.hidden = false;
-
   if (np.artwork) dom.npThumb.src = np.artwork;
   else dom.npThumb.removeAttribute("src");
-
   dom.npStatusBadge.textContent = np.paused ? "⏸ En pausa" : "● En vivo";
   dom.npStatusBadge.classList.toggle("paused", np.paused);
-  // FASE 2: la plataforma se mantiene real; la música en www se etiqueta.
   dom.npSourceBadge.textContent =
     np.source === "yt_music"
       ? "YT Music"
       : np.isMusic
         ? "YouTube · Música"
         : "YouTube";
-
   if (np.category) {
     dom.npCategoryBadge.textContent = translateCategory(np.category);
     dom.npCategoryBadge.hidden = false;
   } else {
     dom.npCategoryBadge.hidden = true;
   }
-
   const fmtLabels = { short: "Short", live: "En vivo", mix: "Mix" };
   const fmtText =
     fmtLabels[np.contentType] || (np.context === "mix" ? "Mix" : "");
   dom.npFormatBadge.hidden = !fmtText;
   if (fmtText) dom.npFormatBadge.textContent = fmtText;
-
   dom.npLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
-
   dom.npTitle.textContent = np.title;
   dom.npArtist.textContent = np.album
     ? `${np.artist} · ${np.album}`
     : np.artist;
-
   const pct =
     np.duration > 0 ? Math.min(100, (np.currentTime / np.duration) * 100) : 0;
   dom.npBarFill.style.width = `${pct.toFixed(1)}%`;
-
   const extras = [];
   if (np.playbackRate && np.playbackRate !== 1)
     extras.push(`${np.playbackRate}x`);
@@ -439,7 +251,6 @@ function renderNowPlaying(np) {
   dom.npTime.textContent = extras.length
     ? `${clock} · ${extras.join(" ")}`
     : clock;
-
   const remaining = Math.max(
     0,
     (np.minRequired || 20) - (np.sessionSeconds || 0),
@@ -459,10 +270,8 @@ function renderOtherOpenTabs(others) {
     dom.npOtherList.replaceChildren();
     return;
   }
-
   dom.npOtherWrap.hidden = false;
   dom.npOtherHeader.textContent = `Otras pestañas abiertas (${others.length})`;
-
   dom.npOtherList.replaceChildren(
     ...others.map((tab) => {
       const li = document.createElement("li");
@@ -470,23 +279,18 @@ function renderOtherOpenTabs(others) {
       btn.type = "button";
       btn.className = "np-other-btn";
       btn.title = "Clic para ver en la tarjeta principal";
-
       const st = document.createElement("span");
       st.className = tab.paused ? "np-other-state" : "np-other-state playing";
       st.textContent = tab.paused ? "⏸" : "▶";
-
       const img = document.createElement("img");
       img.className = "np-other-thumb";
       if (tab.artwork) img.src = tab.artwork;
       img.alt = "";
-
       const meta = document.createElement("div");
       meta.className = "meta";
-
       const title = document.createElement("div");
       title.className = "np-other-title";
       title.textContent = tab.title;
-
       const srcLabel =
         tab.source === "yt_music"
           ? "YT Music"
@@ -496,26 +300,22 @@ function renderOtherOpenTabs(others) {
       const sub = document.createElement("div");
       sub.className = "np-other-sub";
       sub.textContent = `${srcLabel} · ${tab.artist}`;
-
       meta.append(title, sub);
-
       const time = document.createElement("span");
       time.className = "np-other-time";
       time.textContent =
         tab.duration > 0
           ? `${formatClock(tab.currentTime)} / ${formatClock(tab.duration)}`
           : formatClock(tab.currentTime);
-
       const children = [st, img, meta, time];
-
-      if (tab.tabId != null && openBrowserTabs.has(tab.tabId)) {
+      if (tab.tabId != null && npService.tabs.has(tab.tabId)) {
         const jumpBtn = document.createElement("span");
         jumpBtn.className = "np-other-time";
         jumpBtn.textContent = "↗";
         jumpBtn.title = "Ir a esta pestaña en Chrome";
         jumpBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          const realTab = openBrowserTabs.get(tab.tabId);
+          const realTab = npService.tabs.get(tab.tabId);
           if (realTab) {
             chrome.tabs.update(realTab.id, { active: true });
             chrome.windows.update(realTab.windowId, { focused: true });
@@ -523,13 +323,11 @@ function renderOtherOpenTabs(others) {
         });
         children.push(jumpBtn);
       }
-
       btn.append(...children);
       btn.addEventListener("click", () => {
         uiState.pinnedNpTabId = tab.storageKey || tab.tabId;
         renderBestNowPlaying();
       });
-
       li.append(btn);
       return li;
     }),
@@ -537,44 +335,15 @@ function renderOtherOpenTabs(others) {
 }
 
 function renderBestNowPlaying() {
-  const now = Date.now();
-  const candidates = [...npTabsMap.values()].filter((v) => {
-    if (v.tabId != null) {
-      if (!openBrowserTabs.has(v.tabId)) return false;
-      return v.paused
-        ? now - v.updatedAt < 43200000
-        : now - v.updatedAt < 90000;
-    }
-    return now - v.updatedAt < 15000;
-  });
-
-  if (candidates.length === 0) {
+  const sel = npService.select(uiState.pinnedNpTabId);
+  if (!sel) {
     uiState.pinnedNpTabId = null;
     renderNowPlaying(null);
     renderOtherOpenTabs([]);
     return;
   }
-
-  candidates.sort((a, b) => {
-    if (a.paused !== b.paused) return a.paused ? 1 : -1;
-    if (a.visible !== b.visible) return a.visible ? -1 : 1;
-    return b.updatedAt - a.updatedAt;
-  });
-
-  const pinned =
-    uiState.pinnedNpTabId != null
-      ? candidates.find(
-          (c) => (c.storageKey || c.tabId) === uiState.pinnedNpTabId,
-        )
-      : null;
-  const primary = pinned || candidates[0];
-  const primaryKey = primary.storageKey || primary.tabId;
-  const others = candidates.filter(
-    (c) => (c.storageKey || c.tabId) !== primaryKey,
-  );
-
-  renderNowPlaying(primary);
-  renderOtherOpenTabs(others);
+  renderNowPlaying(sel.primary);
+  renderOtherOpenTabs(sel.others);
 }
 
 // --- FILTROS ---
@@ -588,7 +357,6 @@ function getFilteredPlays(checkDate = true) {
     ),
   );
 }
-
 function getFilteredMeta(items, checkDate = true) {
   return items.filter((it) =>
     matchesPeriodAndSourceOnly(
@@ -600,11 +368,10 @@ function getFilteredMeta(items, checkDate = true) {
   );
 }
 
-// --- PESTAÑAS ---
+// --- TABS ---
 function renderSummaryTab() {
-  const filtered = getFilteredPlays(true);
-
-  if (filtered.length === 0) {
+  const vm = summaryVM(getFilteredPlays(true));
+  if (vm.empty) {
     dom.totalTime.textContent = "0 min";
     dom.totalPlays.textContent = "0";
     dom.totalLoops.textContent = "🔁 0";
@@ -618,63 +385,32 @@ function renderSummaryTab() {
     dom.emptyMsg.hidden = false;
     return;
   }
-
   dom.emptyMsg.hidden = true;
-  let totalSeconds = 0;
-  let totalLoops = 0;
-  const hoursBuckets = new Array(24).fill(0);
-  const artistsMap = new Map();
-
-  for (const item of filtered) {
-    totalSeconds += item.seconds || 0;
-    if (item.isLoop) totalLoops += 1;
-    hoursBuckets[new Date(item.timestamp).getHours()] += item.seconds || 0;
-    const ak = item.artist || "Desconocido";
-    const cur = artistsMap.get(ak) || { plays: 0, seconds: 0 };
-    cur.plays += 1;
-    cur.seconds += item.seconds || 0;
-    artistsMap.set(ak, cur);
-  }
-
-  const topTracksAll = aggregateTracks(filtered);
-  uiState.topVideoIds = topTracksAll
+  uiState.topVideoIds = vm.topTracks
     .map((t) => t.videoId)
     .filter(Boolean)
     .slice(0, 20);
   dom.makePlaylistBtn.hidden = uiState.topVideoIds.length === 0;
-
-  const topArtist =
-    [...artistsMap.entries()].sort(
-      (a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays,
-    )[0]?.[0] || "—";
-
   const periodLabel =
     dom.periodSelect.options[dom.periodSelect.selectedIndex]?.text ||
     "Mi Recap";
   uiState.summaryCardData = {
     subtitle: periodLabel.toUpperCase(),
-    topTracks: topTracksAll.slice(0, 5),
-    totalSeconds,
-    totalPlays: filtered.length,
-    totalLoops,
-    topArtist,
+    topTracks: vm.topTracks.slice(0, 5),
+    totalSeconds: vm.totalSeconds,
+    totalPlays: vm.totalPlays,
+    totalLoops: vm.totalLoops,
+    topArtist: vm.topArtist,
   };
-  dom.exportImgBtn.hidden = topTracksAll.length === 0;
-
-  const maxHourSec = Math.max(...hoursBuckets);
-  const peakIdx = hoursBuckets.indexOf(maxHourSec);
-  const streak = computeStreak(filtered);
-
-  dom.totalTime.textContent = formatDuration(totalSeconds);
-  dom.totalPlays.textContent = String(filtered.length);
-  dom.totalLoops.textContent = `🔁 ${totalLoops}`;
-  dom.uniqueCount.textContent = String(topTracksAll.length);
-  dom.streakDays.textContent = `${streak} ${streak === 1 ? "día" : "días"}`;
-  dom.peakHour.textContent =
-    maxHourSec > 0 ? `${String(peakIdx).padStart(2, "0")}:00h` : "—";
-
+  dom.exportImgBtn.hidden = vm.topTracks.length === 0;
+  dom.totalTime.textContent = formatDuration(vm.totalSeconds);
+  dom.totalPlays.textContent = String(vm.totalPlays);
+  dom.totalLoops.textContent = `🔁 ${vm.totalLoops}`;
+  dom.uniqueCount.textContent = String(vm.unique);
+  dom.streakDays.textContent = `${vm.streak} ${vm.streak === 1 ? "día" : "días"}`;
+  dom.peakHour.textContent = vm.peakLabel;
   dom.topList.replaceChildren(
-    ...topTracksAll.slice(0, 15).map((track, idx) => {
+    ...vm.topTracks.slice(0, 15).map((track, idx) => {
       const mins =
         track.seconds > 0
           ? `${Math.max(1, Math.round(track.seconds / 60))}m`
@@ -693,9 +429,7 @@ function renderSummaryTab() {
         track.title,
         track.artist,
         right,
-        {
-          href: track.videoUrl || undefined,
-        },
+        { href: track.videoUrl || undefined },
       );
     }),
   );
@@ -742,7 +476,6 @@ function renderRecentTab() {
     );
     return;
   }
-
   if (uiState.recentMode === "likes" || uiState.recentMode === "subs") {
     const type = uiState.recentMode === "likes" ? "like" : "subscribe";
     const items = getFilteredMeta(store.interactions, true)
@@ -753,7 +486,6 @@ function renderRecentTab() {
     dom.recentList.replaceChildren(...items.map(renderInteractionRow));
     return;
   }
-
   const searches = getFilteredMeta(store.searches, true)
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 30);
@@ -762,163 +494,52 @@ function renderRecentTab() {
 }
 
 function renderActivityTab() {
-  const filtered = getFilteredPlays(true);
-  const filteredInter = getFilteredMeta(store.interactions, true);
-  const filteredSearches = getFilteredMeta(store.searches, true);
-  const filteredSkips = store.skips.filter((it) =>
-    matchesFilter(it, dom.periodSelect.value, dom.sourceSelect.value, true),
+  const vm = activityVM(
+    getFilteredPlays(true),
+    getFilteredMeta(store.interactions, true),
+    getFilteredMeta(store.searches, true),
+    store.skips.filter((it) =>
+      matchesFilter(it, dom.periodSelect.value, dom.sourceSelect.value, true),
+    ),
   );
 
-  const likesCount = filteredInter.filter((it) => it.type === "like").length;
-  const subsCount = filteredInter.filter(
-    (it) => it.type === "subscribe",
-  ).length;
-
-  const hoursBuckets = new Array(24).fill(0);
-  const formatCounts = { video: 0, music: 0, short: 0, live: 0 };
-  const contextCounts = { direct: 0, mix: 0, playlist: 0 };
-  const categoriesMap = new Map();
-  const artistsMap = new Map();
-  const albumsMap = new Map();
-  let rateSum = 0;
-  let rateCount = 0;
-
-  for (const item of filtered) {
-    hoursBuckets[new Date(item.timestamp).getHours()] += item.seconds || 0;
-    const cType =
-      item.contentType || (item.source === "yt_music" ? "music" : "video");
-    formatCounts[cType] = (formatCounts[cType] || 0) + 1;
-    const ctx = item.context || "direct";
-    contextCounts[ctx] = (contextCounts[ctx] || 0) + 1;
-
-    // FASE 2: la categoría implícita "Music" sigue al contenido, no al host.
-    const catKey = item.category || (isMusicItem(item) ? "Music" : "");
-    if (catKey) {
-      const c = categoriesMap.get(catKey) || { plays: 0, seconds: 0 };
-      c.plays += 1;
-      c.seconds += item.seconds || 0;
-      categoriesMap.set(catKey, c);
-    }
-
-    if (item.playbackRate) {
-      rateSum += item.playbackRate;
-      rateCount += 1;
-    }
-
-    const ak = item.artist || "Desconocido";
-    const as = artistsMap.get(ak) || {
-      plays: 0,
-      seconds: 0,
-      artwork: item.artwork,
-      url: item.channelUrl || "",
-    };
-    as.plays += 1;
-    as.seconds += item.seconds || 0;
-    if (!as.artwork && item.artwork) as.artwork = item.artwork;
-    if (!as.url && item.channelUrl) as.url = item.channelUrl;
-    artistsMap.set(ak, as);
-
-    if (item.album) {
-      const albKey = `${item.album.toLowerCase()}::${ak.toLowerCase()}`;
-      const alb = albumsMap.get(albKey) || {
-        album: item.album,
-        artist: item.artist,
-        artwork: item.artwork,
-        plays: 0,
-        seconds: 0,
-      };
-      alb.plays += 1;
-      alb.seconds += item.seconds || 0;
-      if (!alb.artwork && item.artwork) alb.artwork = item.artwork;
-      albumsMap.set(albKey, alb);
-    }
-  }
-
-  const catEntries = [...categoriesMap.entries()].sort(
-    (a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays,
+  dom.categoriesBox.hidden = vm.catEntries.length === 0;
+  dom.categoriesList.replaceChildren(
+    ...vm.catEntries.map((st) => {
+      const row = document.createElement("div");
+      row.className = "cat-row";
+      const top = document.createElement("div");
+      top.className = "cat-row-top";
+      const lbl = document.createElement("span");
+      lbl.textContent = translateCategory(st.cat);
+      const meta = document.createElement("span");
+      meta.textContent = `${st.pct}% · ${st.plays}x (${formatDuration(st.seconds)})`;
+      top.append(lbl, meta);
+      const track = document.createElement("div");
+      track.className = "cat-track";
+      const fill = document.createElement("div");
+      fill.className = "cat-fill";
+      fill.style.width = `${st.pct}%`;
+      track.append(fill);
+      row.append(top, track);
+      return row;
+    }),
   );
-  dom.categoriesBox.hidden = catEntries.length === 0;
-  if (catEntries.length > 0) {
-    const totalWeight = catEntries.reduce(
-      (acc, [, st]) => acc + (st.seconds || st.plays),
-      0,
-    );
-    dom.categoriesList.replaceChildren(
-      ...catEntries.slice(0, 6).map(([rawCat, st]) => {
-        const pct =
-          totalWeight > 0
-            ? Math.max(
-                4,
-                Math.round(((st.seconds || st.plays) / totalWeight) * 100),
-              )
-            : 0;
-        const row = document.createElement("div");
-        row.className = "cat-row";
-        const top = document.createElement("div");
-        top.className = "cat-row-top";
-        const lbl = document.createElement("span");
-        lbl.textContent = translateCategory(rawCat);
-        const meta = document.createElement("span");
-        meta.textContent = `${pct}% · ${st.plays}x (${formatDuration(st.seconds)})`;
-        top.append(lbl, meta);
-        const track = document.createElement("div");
-        track.className = "cat-track";
-        const fill = document.createElement("div");
-        fill.className = "cat-fill";
-        fill.style.width = `${pct}%`;
-        track.append(fill);
-        row.append(top, track);
-        return row;
-      }),
-    );
-  }
 
-  const maxHourSec = Math.max(...hoursBuckets);
   dom.hoursChart.replaceChildren(
-    ...hoursBuckets.map((sec, h) => {
+    ...vm.hours.map((sec, h) => {
       const bar = document.createElement("div");
       bar.className = sec === 0 ? "hour-bar zero" : "hour-bar";
       const pct =
-        maxHourSec > 0 ? Math.max(5, Math.round((sec / maxHourSec) * 100)) : 5;
+        vm.maxHour > 0 ? Math.max(5, Math.round((sec / vm.maxHour) * 100)) : 5;
       bar.style.height = sec === 0 ? "4px" : `${pct}%`;
       bar.title = `${String(h).padStart(2, "0")}:00 — ${formatDuration(sec)}`;
       return bar;
     }),
   );
 
-  const avgRate =
-    rateCount > 0
-      ? `${(rateSum / rateCount).toFixed(2).replace(/\.00$/, "")}x`
-      : "1x";
-
-  // FASE 2: chips por contenido musical, no por plataforma.
-  const musicCount = filtered.filter(isMusicItem).length;
-  const musicOnYouTube = filtered.filter(
-    (it) => it.source === "youtube" && isMusicItem(it),
-  ).length;
-  const videosNonMusic = filtered.filter((it) => {
-    const cType =
-      it.contentType || (it.source === "yt_music" ? "music" : "video");
-    return cType === "video" && !isMusicItem(it);
-  }).length;
-
-  const chips = [
-    ["Música", musicCount],
-    ["Música en YouTube", musicOnYouTube],
-    ["Videos (no música)", videosNonMusic],
-    ["Shorts", formatCounts.short || 0],
-    ["Directos", formatCounts.live || 0],
-    [
-      "Mix / Playlist",
-      (contextCounts.mix || 0) + (contextCounts.playlist || 0),
-    ],
-    ["Vel. promedio", avgRate],
-    ["❤️ Me gusta", likesCount],
-    ["🔍 Búsquedas", filteredSearches.length],
-    ["🔔 Suscrip.", subsCount],
-  ];
   dom.breakdownStats.replaceChildren(
-    ...chips.map(([label, val]) => {
+    ...vm.chips.map(([label, val]) => {
       const div = document.createElement("div");
       div.className = "bd-chip";
       const sp = document.createElement("span");
@@ -930,109 +551,59 @@ function renderActivityTab() {
     }),
   );
 
-  dom.searchesBox.hidden = filteredSearches.length === 0;
-  if (filteredSearches.length > 0) {
-    const sMap = new Map();
-    for (const s of filteredSearches) {
-      const cur = sMap.get(s.normalized) || {
-        query: s.query,
-        url: s.url,
-        source: s.source,
-        count: 0,
-      };
-      cur.count += 1;
-      if (s.url) cur.url = s.url;
-      sMap.set(s.normalized, cur);
-    }
-    const topS = [...sMap.values()]
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 8);
-    dom.topSearchesList.replaceChildren(
-      ...topS.map((s, idx) =>
-        buildTrackRow(
-          String(idx + 1),
-          "",
-          s.query,
-          s.source === "yt_music" ? "YT Music" : "YouTube",
-          `${s.count}x`,
-          {
-            href: s.url || undefined,
-            noThumb: true,
-          },
-        ),
-      ),
-    );
-  }
-
-  const topAlbums = [...albumsMap.values()]
-    .sort((a, b) => b.plays - a.plays || b.seconds - a.seconds)
-    .slice(0, 5);
-  dom.albumsBox.hidden = topAlbums.length === 0;
-  if (topAlbums.length > 0) {
-    dom.topAlbumsList.replaceChildren(
-      ...topAlbums.map((a, idx) =>
-        buildTrackRow(
-          String(idx + 1),
-          a.artwork,
-          a.album,
-          a.artist,
-          `${a.plays}x · ${formatDuration(a.seconds)}`,
-        ),
-      ),
-    );
-  }
-
-  const topArtists = [...artistsMap.entries()]
-    .sort((a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays)
-    .slice(0, 5);
-  dom.topArtistsList.replaceChildren(
-    ...topArtists.map(([name, st], idx) =>
+  dom.searchesBox.hidden = vm.topSearches.length === 0;
+  dom.topSearchesList.replaceChildren(
+    ...vm.topSearches.map((s, idx) =>
       buildTrackRow(
         String(idx + 1),
-        st.artwork,
-        name,
-        `${st.plays} reproducciones`,
-        formatDuration(st.seconds),
-        {
-          href: st.url || undefined,
-        },
+        "",
+        s.query,
+        s.source === "yt_music" ? "YT Music" : "YouTube",
+        `${s.count}x`,
+        { href: s.url || undefined, noThumb: true },
       ),
     ),
   );
 
-  dom.skipsBox.hidden = filteredSkips.length === 0;
-  if (filteredSkips.length > 0) {
-    const skipsMap = new Map();
-    for (const sk of filteredSkips) {
-      const key = getGroupKey(sk);
-      const cur = skipsMap.get(key) || {
-        title: sk.title,
-        artist: sk.artist,
-        artwork: sk.artwork,
-        videoUrl: resolveVideoUrl(sk),
-        count: 0,
-      };
-      cur.count += 1;
-      skipsMap.set(key, cur);
-    }
-    const topSkips = [...skipsMap.values()]
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-    dom.topSkipsList.replaceChildren(
-      ...topSkips.map((s, idx) =>
-        buildTrackRow(
-          String(idx + 1),
-          s.artwork,
-          s.title,
-          s.artist,
-          `${s.count} skips`,
-          {
-            href: s.videoUrl || undefined,
-          },
-        ),
+  dom.albumsBox.hidden = vm.topAlbums.length === 0;
+  dom.topAlbumsList.replaceChildren(
+    ...vm.topAlbums.map((a, idx) =>
+      buildTrackRow(
+        String(idx + 1),
+        a.artwork,
+        a.album,
+        a.artist,
+        `${a.plays}x · ${formatDuration(a.seconds)}`,
       ),
-    );
-  }
+    ),
+  );
+
+  dom.topArtistsList.replaceChildren(
+    ...vm.topArtists.map((st, idx) =>
+      buildTrackRow(
+        String(idx + 1),
+        st.artwork,
+        st.name,
+        `${st.plays} reproducciones`,
+        formatDuration(st.seconds),
+        { href: st.url || undefined },
+      ),
+    ),
+  );
+
+  dom.skipsBox.hidden = vm.topSkips.length === 0;
+  dom.topSkipsList.replaceChildren(
+    ...vm.topSkips.map((s, idx) =>
+      buildTrackRow(
+        String(idx + 1),
+        s.artwork,
+        s.title,
+        s.artist,
+        `${s.count} skips`,
+        { href: s.videoUrl || undefined },
+      ),
+    ),
+  );
 }
 
 function renderCalendarTab() {
@@ -1045,124 +616,55 @@ function renderCalendarTab() {
     buildTrackRow,
     renderInteractionRow,
     renderSearchRow,
-    onExportPng: handleExportPng,
+    onExportPng: (cardData, btn) => exportPngCard(cardData, btn),
   });
 }
 
 function renderChannelsTab() {
-  const filteredVisits = getFilteredMeta(store.channelVisits, true);
-  const filteredPlays = getFilteredPlays(true);
+  const vm = channelsVM(
+    getFilteredMeta(store.channelVisits, true),
+    getFilteredPlays(true),
+    uiState.channelSort,
+    uiState.channelMinSec,
+  );
   const newSubsCount = getFilteredMeta(store.interactions, true).filter(
     (it) => it.type === "subscribe",
   ).length;
-
-  const channelsMap = new Map();
-  const getCh = (key, name) => {
-    if (!channelsMap.has(key)) {
-      channelsMap.set(key, {
-        name: name || "Canal",
-        avatar: "",
-        url: "",
-        visits: 0,
-        plays: 0,
-        seconds: 0,
-      });
-    }
-    return channelsMap.get(key);
-  };
-
-  for (const v of filteredVisits) {
-    const ch = getCh(
-      (v.name || v.channelKey || "canal").trim().toLowerCase(),
-      v.name,
-    );
-    ch.visits += 1;
-    if (v.avatar) ch.avatar = v.avatar;
-    if (v.url) ch.url = v.url;
-  }
-  for (const p of filteredPlays) {
-    const ch = getCh((p.artist || "youtube").trim().toLowerCase(), p.artist);
-    ch.plays += 1;
-    ch.seconds += p.seconds || 0;
-    if (!ch.url && p.channelUrl) ch.url = p.channelUrl;
-    if (!ch.avatar && p.artwork) ch.avatar = p.artwork;
-  }
-
-  const allChannels = [...channelsMap.values()];
-  dom.chUniqueCount.textContent = String(allChannels.length);
-  dom.chTotalVisits.textContent = String(filteredVisits.length);
+  dom.chUniqueCount.textContent = String(vm.unique);
+  dom.chTotalVisits.textContent = String(vm.totalVisits);
   dom.chNewSubs.textContent = `🔔 ${newSubsCount}`;
 
-  const withTime = allChannels
-    .filter((c) => c.seconds > 0)
-    .sort((a, b) => b.seconds - a.seconds || b.plays - a.plays);
-  const totalChannelsSec = withTime.reduce((acc, c) => acc + c.seconds, 0);
-  const maxTimeSec = withTime[0]?.seconds || 0;
-
-  dom.channelsDurationEmpty.hidden = withTime.length > 0;
+  dom.channelsDurationEmpty.hidden = vm.withTime.length > 0;
   dom.channelsDurationList.replaceChildren(
-    ...withTime.slice(0, 15).map((ch, idx) => {
-      const sharePct =
-        totalChannelsSec > 0
-          ? Math.round((ch.seconds / totalChannelsSec) * 100)
-          : 0;
-      const barPct =
-        maxTimeSec > 0 ? Math.round((ch.seconds / maxTimeSec) * 100) : 0;
-      return buildTrackRow(
+    ...vm.withTime.map((ch, idx) =>
+      buildTrackRow(
         String(idx + 1),
         ch.avatar,
         ch.name,
-        `${ch.plays} rep. · ${sharePct}% del tiempo`,
+        `${ch.plays} rep. · ${ch.sharePct}% del tiempo`,
         formatDuration(ch.seconds),
-        { href: ch.url || undefined, avatar: true, barPct },
-      );
-    }),
+        { href: ch.url || undefined, avatar: true, barPct: ch.barPct },
+      ),
+    ),
   );
 
-  const filtered = allChannels.filter(
-    (ch) => ch.seconds >= uiState.channelMinSec,
-  );
-  filtered.sort((a, b) => {
-    if (uiState.channelSort === "time")
-      return b.seconds - a.seconds || b.plays - a.plays || b.visits - a.visits;
-    if (uiState.channelSort === "plays")
-      return b.plays - a.plays || b.seconds - a.seconds || b.visits - a.visits;
-    return b.visits - a.visits || b.seconds - a.seconds || b.plays - a.plays;
-  });
-
-  const maxRankSec = Math.max(0, ...filtered.map((c) => c.seconds));
-  dom.channelsEmpty.hidden = filtered.length > 0;
+  dom.channelsEmpty.hidden = vm.ranked.length > 0;
   dom.channelsTopList.replaceChildren(
-    ...filtered.slice(0, 25).map((ch, idx) => {
-      const subParts = [];
-      if (ch.visits > 0)
-        subParts.push(
-          `👁️ ${ch.visits} ${ch.visits === 1 ? "visita" : "visitas"}`,
-        );
-      if (ch.plays > 0) subParts.push(`▶ ${ch.plays} rep.`);
-      if (subParts.length === 0) subParts.push("Sin datos");
-
-      const barPct =
-        maxRankSec > 0 && ch.seconds > 0
-          ? Math.round((ch.seconds / maxRankSec) * 100)
-          : 0;
-      return buildTrackRow(
+    ...vm.ranked.map((ch, idx) =>
+      buildTrackRow(
         String(idx + 1),
         ch.avatar,
         ch.name,
-        subParts.join(" · "),
+        ch.sub,
         ch.seconds > 0 ? formatDuration(ch.seconds) : `${ch.visits}x`,
-        { href: ch.url || undefined, avatar: true, barPct },
-      );
-    }),
+        { href: ch.url || undefined, avatar: true, barPct: ch.barPct },
+      ),
+    ),
   );
 
-  dom.channelsRecentEmpty.hidden = filteredVisits.length > 0;
-  const recentVisits = [...filteredVisits]
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 20);
+  dom.channelsRecentEmpty.hidden = vm.recent.length > 0;
   dom.channelsRecentList.replaceChildren(
-    ...recentVisits.map((v) =>
+    ...vm.recent.map((v) =>
       buildTrackRow(
         "👁",
         v.avatar,
@@ -1176,31 +678,24 @@ function renderChannelsTab() {
 }
 
 function renderLikesTab() {
-  const likes = getFilteredMeta(store.interactions, true)
-    .filter((it) => it.type === "like")
-    .sort((a, b) => b.timestamp - a.timestamp);
-  const subs = getFilteredMeta(store.interactions, true)
-    .filter((it) => it.type === "subscribe")
-    .sort((a, b) => b.timestamp - a.timestamp);
-  const searches = getFilteredMeta(store.searches, true).sort(
-    (a, b) => b.timestamp - a.timestamp,
+  const vm = likesVM(
+    getFilteredMeta(store.interactions, true),
+    getFilteredMeta(store.searches, true),
   );
-
-  dom.lkTotalLikes.textContent = `❤️ ${likes.length}`;
-  dom.lkTotalSubs.textContent = `🔔 ${subs.length}`;
-  dom.lkTotalSearches.textContent = `🔍 ${searches.length}`;
-
-  dom.likesEmpty.hidden = likes.length > 0;
+  dom.lkTotalLikes.textContent = `❤️ ${vm.likes.length}`;
+  dom.lkTotalSubs.textContent = `🔔 ${vm.subs.length}`;
+  dom.lkTotalSearches.textContent = `🔍 ${vm.searches.length}`;
+  dom.likesEmpty.hidden = vm.likes.length > 0;
   dom.likesList.replaceChildren(
-    ...likes.slice(0, 30).map(renderInteractionRow),
+    ...vm.likes.slice(0, 30).map(renderInteractionRow),
   );
-
-  dom.subsEmpty.hidden = subs.length > 0;
-  dom.subsList.replaceChildren(...subs.slice(0, 30).map(renderInteractionRow));
-
-  dom.socialSearchesEmpty.hidden = searches.length > 0;
+  dom.subsEmpty.hidden = vm.subs.length > 0;
+  dom.subsList.replaceChildren(
+    ...vm.subs.slice(0, 30).map(renderInteractionRow),
+  );
+  dom.socialSearchesEmpty.hidden = vm.searches.length > 0;
   dom.socialSearchesList.replaceChildren(
-    ...searches.slice(0, 25).map(renderSearchRow),
+    ...vm.searches.slice(0, 25).map(renderSearchRow),
   );
 }
 
@@ -1217,125 +712,24 @@ function renderActiveTab() {
   TAB_RENDERERS[uiState.activeTab]?.();
   uiState.dirtyTabs.delete(uiState.activeTab);
 }
-
 function invalidateAllTabs() {
   Object.keys(TAB_RENDERERS).forEach((t) => uiState.dirtyTabs.add(t));
   renderActiveTab();
 }
 
-// --- EXPORTAR PNG Y ZIP ---
-async function handleExportPng(cardData, btn) {
-  if (!cardData || cardData.topTracks.length === 0) return;
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "⏳...";
-  try {
-    const blob = await renderRecapPngBlob(cardData);
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `recap-${sanitizeFileSlug(cardData.subtitle)}-${toDateKey(new Date())}.png`;
-    a.click();
-    URL.revokeObjectURL(url);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = orig;
-  }
-}
-
+// --- EXPORT / IMPORT / ENRIQUECER ---
 dom.exportBtn.addEventListener("click", async () => {
   const orig = dom.exportBtn.textContent;
   dom.exportBtn.disabled = true;
   dom.exportBtn.textContent = "⏳...";
-
   try {
     if (uiState.dirtyTabs.has("summary")) renderSummaryTab();
-
-    const imageTasks = [];
-    const seenUrls = new Set();
-    const usedNames = new Set();
-
-    const queueImage = (url, folder, label) => {
-      if (!url?.startsWith("http") || seenUrls.has(url)) return;
-      seenUrls.add(url);
-      const slug = sanitizeFileSlug(label);
-      let unique = slug;
-      let n = 2;
-      while (usedNames.has(`${folder}/${unique}`)) unique = `${slug}-${n++}`;
-      usedNames.add(`${folder}/${unique}`);
-      imageTasks.push({ url, folder, slug: unique });
-    };
-
-    store.history.forEach((it) =>
-      queueImage(it.artwork, "imagenes/portadas", it.videoId || it.title),
+    const blob = await buildExportZip(
+      store,
+      uiState.summaryCardData,
+      (p) => (dom.exportBtn.textContent = p),
     );
-    store.channelVisits.forEach((ch) =>
-      queueImage(ch.avatar, "imagenes/canales", ch.name || ch.channelKey),
-    );
-    store.interactions.forEach((it) =>
-      queueImage(
-        it.artwork,
-        it.type === "subscribe" ? "imagenes/canales" : "imagenes/portadas",
-        it.title,
-      ),
-    );
-    store.skips.forEach((sk) =>
-      queueImage(sk.artwork, "imagenes/portadas", sk.videoId || sk.title),
-    );
-
-    const zipFiles = [];
-    const imageMap = {};
-    let done = 0;
-
-    for (let i = 0; i < imageTasks.length; i += 6) {
-      await Promise.all(
-        imageTasks.slice(i, i + 6).map(async (task) => {
-          try {
-            const res = await fetch(task.url);
-            if (!res.ok) return;
-            const blob = await res.blob();
-            const buf = new Uint8Array(await blob.arrayBuffer());
-            const filePath = `${task.folder}/${task.slug}.${getExtFromMime(blob.type)}`;
-            zipFiles.push({ name: filePath, data: buf });
-            imageMap[task.url] = filePath;
-          } catch {
-            // Ignorar
-          } finally {
-            done += 1;
-            dom.exportBtn.textContent = `⏳ ${done}/${imageTasks.length}`;
-          }
-        }),
-      );
-    }
-
-    if (uiState.summaryCardData) {
-      const cardBlob = await renderRecapPngBlob(uiState.summaryCardData);
-      if (cardBlob) {
-        zipFiles.push({
-          name: "recap-tarjeta.png",
-          data: new Uint8Array(await cardBlob.arrayBuffer()),
-        });
-      }
-    }
-
-    const payload = {
-      exportedAt: new Date().toISOString(),
-      ...store,
-      imageMap,
-    };
-    zipFiles.unshift({
-      name: "recap-backup.json",
-      data: new TextEncoder().encode(JSON.stringify(payload, null, 2)),
-    });
-
-    const zipBlob = buildZipBlob(zipFiles);
-    const url = URL.createObjectURL(zipBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `youtube-recap-${toDateKey(new Date())}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `youtube-recap-${toDateKey(new Date())}.zip`);
     showStatus("✓ ZIP exportado con datos, tarjeta PNG e imágenes.");
   } catch (err) {
     showStatus(`Error al exportar: ${err.message}`, true);
@@ -1345,31 +739,18 @@ dom.exportBtn.addEventListener("click", async () => {
   }
 });
 
-// --- IMPORTAR ---
 dom.importBtn.addEventListener("click", () => {
-  if (!isFullMode) {
-    window.open(chrome.runtime.getURL("popup.html?full=1&import=1"), "_blank");
-    return;
-  }
-  dom.importInput.click();
+  window.open(chrome.runtime.getURL("full.html?import=1"), "_blank");
 });
 
 dom.importInput.addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
-
   try {
-    const isZip =
-      file.name.toLowerCase().endsWith(".zip") || file.type.includes("zip");
-    const parsed = isZip
-      ? await extractJsonFromZipBuffer(await file.arrayBuffer())
-      : JSON.parse(await file.text());
-
-    const { updatedData, message } = importBackupPayload(parsed, store);
+    const { updatedData, message } = await importFromFile(file, store);
     await chrome.storage.local.set(updatedData);
     Object.assign(store, updatedData);
-    // FASE 3: los backups viejos/Takeout traen registros sin flag.
-    if (migrateMusicFlags(store)) await persistMusicFlags();
+    if (migrateMusicFlags(store)) await persistMusicFlags(store);
     invalidateAllTabs();
     showStatus(message);
   } catch (err) {
@@ -1379,98 +760,27 @@ dom.importInput.addEventListener("change", async (e) => {
   }
 });
 
-// --- FASE 5: RECLASIFICAR IMPORTADOS SIN CATEGORÍA ---
 dom.enrichMusicBtn.addEventListener("click", async () => {
-  const candidates = [];
-  const seen = new Set();
-  const push = (it) => {
-    if (
-      it &&
-      it.source === "youtube" &&
-      !it.category &&
-      !it.isMusic &&
-      it.videoId &&
-      !seen.has(it.videoId)
-    ) {
-      seen.add(it.videoId);
-      candidates.push(it.videoId);
-    }
-  };
-  store.history.forEach(push);
-  store.skips.forEach(push);
-  store.interactions.forEach((it) => it.type === "like" && push(it));
-
-  if (candidates.length === 0) {
-    showStatus("No hay registros de YouTube sin categoría para reclasificar.");
-    return;
-  }
-
-  const batch = candidates.slice(0, ENRICH_MAX_PER_RUN);
-  const remaining = candidates.length - batch.length;
   const orig = dom.enrichMusicBtn.textContent;
   dom.enrichMusicBtn.disabled = true;
-
-  const results = new Map();
-  let done = 0;
-
   try {
-    for (let i = 0; i < batch.length; i += ENRICH_CONCURRENCY) {
-      await Promise.all(
-        batch.slice(i, i + ENRICH_CONCURRENCY).map(async (vid) => {
-          try {
-            const res = await fetch(
-              `https://www.youtube.com/watch?v=${encodeURIComponent(vid)}`,
-              { credentials: "omit" },
-            );
-            const html = res.ok ? await res.text() : "";
-            const cat =
-              html
-                .match(/"category"\s*:\s*"([^"]+)"/)?.[1]
-                ?.replace(/\\u0026/g, "&") || "";
-            const mtype =
-              html.match(/"musicVideoType"\s*:\s*"([^"]+)"/)?.[1] || "";
-            results.set(vid, { cat, mtype });
-          } catch {
-            results.set(vid, { cat: "", mtype: "" });
-          } finally {
-            done += 1;
-            dom.enrichMusicBtn.textContent = `⏳ ${done}/${batch.length}`;
-          }
-        }),
+    const res = await enrichImported(store, (p) => {
+      dom.enrichMusicBtn.textContent = p;
+    });
+    if (res.none) {
+      showStatus(
+        "No hay registros de YouTube sin categoría para reclasificar.",
       );
+      return;
     }
-
-    let updated = 0;
-    const apply = (it) => {
-      if (!it || it.source !== "youtube" || !it.videoId) return;
-      const r = results.get(it.videoId);
-      if (!r || (!r.cat && !r.mtype)) return;
-      let changed = false;
-      if (r.cat && !it.category) {
-        it.category = r.cat;
-        changed = true;
-      }
-      if (
-        computeIsMusicFlag(it.category, r.mtype, it.artist) &&
-        it.isMusic !== true
-      ) {
-        it.isMusic = true;
-        changed = true;
-      }
-      if (changed) updated += 1;
-    };
-    store.history.forEach(apply);
-    store.skips.forEach(apply);
-    store.interactions.forEach((it) => it.type === "like" && apply(it));
-
-    if (updated > 0) {
-      await persistMusicFlags();
+    if (res.updated > 0) {
+      await persistMusicFlags(store);
       invalidateAllTabs();
     }
     showStatus(
-      updated > 0
-        ? `✓ Reclasificados ${updated} registros (${batch.length} videos consultados).${remaining > 0 ? ` Quedan ${remaining} para otra corrida.` : ""}`
-        : `Sin cambios: ${batch.length} videos consultados, ninguno musical.${remaining > 0 ? ` Quedan ${remaining} para otra corrida.` : ""}`,
+      res.updated > 0
+        ? `✓ Reclasificados ${res.updated} registros (${res.consulted} videos consultados).${res.remaining > 0 ? ` Quedan ${res.remaining} para otra corrida.` : ""}`
+        : `Sin cambios: ${res.consulted} videos consultados, ninguno musical.${res.remaining > 0 ? ` Quedan ${res.remaining} para otra corrida.` : ""}`,
     );
   } catch (err) {
     showStatus(`Error al reclasificar: ${err.message}`, true);
@@ -1482,14 +792,13 @@ dom.enrichMusicBtn.addEventListener("click", async () => {
 
 // --- EVENTOS UI ---
 dom.expandBtn.addEventListener("click", () => {
-  window.open(chrome.runtime.getURL("popup.html?full=1"), "_blank");
+  window.open(chrome.runtime.getURL("full.html"), "_blank");
 });
-
 dom.exportImgBtn.addEventListener("click", () =>
-  handleExportPng(uiState.summaryCardData, dom.exportImgBtn),
+  exportPngCard(uiState.summaryCardData, dom.exportImgBtn),
 );
 dom.calMonthImgBtn.addEventListener("click", () =>
-  handleExportPng(uiState.monthCardData, dom.calMonthImgBtn),
+  exportPngCard(uiState.monthCardData, dom.calMonthImgBtn),
 );
 dom.makePlaylistBtn.addEventListener("click", () =>
   openInstantPlaylist(uiState.topVideoIds),
@@ -1504,7 +813,6 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
       .querySelectorAll(".tab-btn")
       .forEach((b) => b.classList.remove("active"));
     document.querySelectorAll(".tab-panel").forEach((p) => (p.hidden = true));
-
     btn.classList.add("active");
     uiState.activeTab = btn.dataset.tab;
     $(`tab-${uiState.activeTab}`).hidden = false;
@@ -1523,74 +831,7 @@ document.querySelectorAll(".sub-pill[data-recent]").forEach((btn) => {
   });
 });
 
-document.querySelectorAll(".cal-pill[data-calday]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document
-      .querySelectorAll(".cal-pill[data-calday]")
-      .forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    uiState.calDayMode = btn.dataset.calday;
-    renderCalendarTab();
-  });
-});
-
-document.querySelectorAll(".cal-mode-btn[data-calview]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document
-      .querySelectorAll(".cal-mode-btn[data-calview]")
-      .forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    uiState.calViewMode = btn.dataset.calview;
-    renderCalendarTab();
-  });
-});
-
-dom.calSearchInput.addEventListener("input", () => {
-  uiState.calSearchQuery = dom.calSearchInput.value;
-  renderCalendarTab();
-});
-
-dom.calPrevBtn.addEventListener("click", () => {
-  uiState.calMonth -= 1;
-  if (uiState.calMonth < 0) {
-    uiState.calMonth = 11;
-    uiState.calYear -= 1;
-  }
-  uiState.selectedDateKey = toDateKey(
-    new Date(uiState.calYear, uiState.calMonth, 1),
-  );
-  renderCalendarTab();
-});
-
-dom.calNextBtn.addEventListener("click", () => {
-  uiState.calMonth += 1;
-  if (uiState.calMonth > 11) {
-    uiState.calMonth = 0;
-    uiState.calYear += 1;
-  }
-  uiState.selectedDateKey = toDateKey(
-    new Date(uiState.calYear, uiState.calMonth, 1),
-  );
-  renderCalendarTab();
-});
-
-dom.calTodayBtn.addEventListener("click", () => {
-  const today = new Date();
-  uiState.calYear = today.getFullYear();
-  uiState.calMonth = today.getMonth();
-  uiState.selectedDateKey = toDateKey(today);
-  renderCalendarTab();
-});
-
-dom.calYearPrevBtn.addEventListener("click", () => {
-  uiState.calYear -= 1;
-  renderCalendarTab();
-});
-
-dom.calYearNextBtn.addEventListener("click", () => {
-  uiState.calYear += 1;
-  renderCalendarTab();
-});
+bindCalendarControls(dom, uiState, renderCalendarTab);
 
 document.querySelectorAll(".ch-sort-pill[data-chsort]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -1602,7 +843,6 @@ document.querySelectorAll(".ch-sort-pill[data-chsort]").forEach((btn) => {
     renderChannelsTab();
   });
 });
-
 document.querySelectorAll(".ch-dur-pill[data-chmin]").forEach((btn) => {
   btn.addEventListener("click", () => {
     document
@@ -1620,24 +860,15 @@ dom.sourceSelect.addEventListener("change", invalidateAllTabs);
 dom.clearBtn.addEventListener("click", () => {
   dom.confirmClearDialog.showModal();
 });
-
 dom.cancelClearBtn.addEventListener("click", () => {
   dom.confirmClearDialog.close();
 });
-
 dom.confirmClearDialog.addEventListener("click", (e) => {
   if (e.target === dom.confirmClearDialog) dom.confirmClearDialog.close();
 });
-
 dom.confirmClearBtn.addEventListener("click", async () => {
   dom.confirmClearDialog.close();
-  const empty = {
-    history: [],
-    channelVisits: [],
-    skips: [],
-    interactions: [],
-    searches: [],
-  };
+  const empty = emptyStore();
   await chrome.storage.local.set(empty);
   Object.assign(store, empty);
   invalidateAllTabs();
@@ -1645,66 +876,30 @@ dom.confirmClearBtn.addEventListener("click", async () => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  openBrowserTabs.delete(tabId);
-  npTabsMap.delete(`np_${tabId}`);
+  npService.removeTab(tabId);
   renderBestNowPlaying();
 });
 
+let dataRenderTimer = null;
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
-
-  let npChanged = false;
-  let needTabSync = false;
-  let dataChanged = false;
-
-  for (const [key, change] of Object.entries(changes)) {
-    if (key.startsWith("np_")) {
-      if (change.newValue) {
-        npTabsMap.set(key, change.newValue);
-        if (
-          change.newValue.tabId != null &&
-          !openBrowserTabs.has(change.newValue.tabId)
-        ) {
-          needTabSync = true;
-        }
-      } else {
-        npTabsMap.delete(key);
-      }
-      npChanged = true;
-    } else if (
-      [
-        "history",
-        "channelVisits",
-        "skips",
-        "interactions",
-        "searches",
-      ].includes(key)
-    ) {
-      store[key] = change.newValue || [];
-      dataChanged = true;
-    }
-  }
-
-  if (needTabSync) await syncOpenTabs();
+  const { npChanged, needSync, dataChanged, updates } =
+    npService.applyChanges(changes);
+  if (needSync) await npService.sync();
   if (npChanged) renderBestNowPlaying();
-  if (dataChanged) invalidateAllTabs();
+  if (dataChanged) {
+    Object.assign(store, updates);
+    if (dataRenderTimer) clearTimeout(dataRenderTimer);
+    dataRenderTimer = setTimeout(invalidateAllTabs, 250);
+  }
 });
 
 async function init() {
-  const [all] = await Promise.all([
-    chrome.storage.local.get(null),
-    syncOpenTabs(),
+  const [{ store: loaded, all }] = await Promise.all([
+    loadStore(),
+    npService.sync(),
   ]);
-
-  store.history = Array.isArray(all.history) ? all.history : [];
-  store.channelVisits = Array.isArray(all.channelVisits)
-    ? all.channelVisits
-    : [];
-  store.skips = Array.isArray(all.skips) ? all.skips : [];
-  store.interactions = Array.isArray(all.interactions) ? all.interactions : [];
-  store.searches = Array.isArray(all.searches) ? all.searches : [];
-
-  // --- FASE 3: migración única (guardada con clave de control) ---
+  Object.assign(store, loaded);
   if (!all.musicFlagMigratedV1) {
     const changed = migrateMusicFlags(store);
     const payload = { musicFlagMigratedV1: true };
@@ -1715,36 +910,11 @@ async function init() {
     }
     await chrome.storage.local.set(payload);
   }
-
-  npTabsMap.clear();
-  const staleKeys = [];
-  const now = Date.now();
-  for (const [key, val] of Object.entries(all)) {
-    if (!key.startsWith("np_") || !val) continue;
-    if (key.startsWith("np_fb_")) {
-      if (now - (val.updatedAt || 0) < 15000) npTabsMap.set(key, val);
-      else staleKeys.push(key);
-    } else {
-      const idPart = Number(key.slice(3));
-      if (!Number.isInteger(idPart) || !openBrowserTabs.has(idPart)) {
-        staleKeys.push(key);
-      } else {
-        npTabsMap.set(key, val);
-      }
-    }
-  }
+  const staleKeys = npService.loadInitial(all);
   if (staleKeys.length > 0) chrome.storage.local.remove(staleKeys);
-
   renderBestNowPlaying();
   invalidateAllTabs();
-
   setInterval(renderBestNowPlaying, 3000);
-
-  if (isFullMode && urlParams.get("import") === "1") {
-    showStatus(
-      "Modo completo abierto: tocá «Importar» para elegir tu archivo .zip o .json.",
-    );
-  }
 }
 
 init();

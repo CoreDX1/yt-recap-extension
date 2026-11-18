@@ -1,3 +1,4 @@
+// content.js
 (() => {
   if (typeof window.__ytRecapCleanup === "function") {
     window.__ytRecapCleanup();
@@ -10,8 +11,6 @@
     TICK_MS: 1000,
     MAX_SKIPS: 1000,
     MAX_SEARCHES: 2000,
-    // false = modo amplio (categoría Music incluye AMVs/lyrics/covers).
-    // true  = modo estricto (solo musicVideoType no-UGC o canal "- Topic").
     MUSIC_STRICT: false,
   };
 
@@ -45,6 +44,7 @@
     pendingChannel: null,
     activeSearchKey: null,
     timerId: null,
+    suppressRestartUntil: 0,
   };
 
   let saveQueue = Promise.resolve();
@@ -78,7 +78,6 @@
     if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
       return Promise.resolve(null);
     }
-
     tabIdPromise = chrome.runtime
       .sendMessage({ type: "GET_TAB_ID" })
       .then((res) => {
@@ -96,7 +95,6 @@
       .finally(() => {
         tabIdPromise = null;
       });
-
     return tabIdPromise;
   }
 
@@ -164,17 +162,12 @@
     return `https://www.youtube.com/watch?v=${videoId}`;
   }
 
-  // --- DETECCIÓN DE CONTENIDO MUSICAL (FASE 1) ---
-  // Canales auto-generados de artistas ("Artist - Topic" / "- Tema").
   function isTopicChannel(name) {
     return /[-–—]\s*(topic|tema)\s*$/i.test(String(name || "").trim());
   }
 
-  // Modo amplio: categoría Music (incluye AMVs/lyrics/covers) ||
-  // musicVideoType presente || canal - Topic.
-  // Modo estricto: solo musicVideoType no-UGC || canal - Topic.
   function detectIsMusicContent(category, musicVideoType, artist) {
-    if (isMusic) return true; // plataforma YT Music: música por definición
+    if (isMusic) return true;
     const topic = isTopicChannel(artist);
     const officialType =
       Boolean(musicVideoType) && !/UGC/i.test(musicVideoType);
@@ -205,7 +198,6 @@
         micro
           .querySelector('meta[itemprop="genre"]')
           ?.getAttribute("content") || "";
-
       if (
         microGenre &&
         ((microId && microId === videoId) || microUrl.includes(videoId))
@@ -229,9 +221,6 @@
           const musicType = typeMatch?.[1] || "";
           if (cat) categoryCache.set(videoId, cat);
           if (musicType) musicTypeCache.set(videoId, musicType);
-
-          // Parche tardío: la sesión ya existe y se actualiza por id
-          // (upsert force), sin duplicar registros.
           const s = state.session;
           if (!s || s.videoId !== videoId) return;
           let changed = false;
@@ -253,7 +242,6 @@
         .catch(() => {})
         .finally(() => fetchingCategories.delete(videoId));
     }
-
     return "";
   }
 
@@ -283,7 +271,6 @@
 
   function getTrackInfo() {
     if (document.querySelector("#movie_player.ad-showing")) return null;
-
     const videoId = extractVideoId();
     const contentType = detectContentType();
     const { context, playlistId } = detectPlaybackContext();
@@ -337,7 +324,6 @@
         metaTitle ||
         docTitle ||
         (videoId ? `Video (${videoId})` : "");
-
     if (!title) return null;
 
     const artist =
@@ -376,6 +362,96 @@
     };
   }
 
+  // --- CONTROL REMOTO DESDE EL MODO COMPLETO ---
+  function clickFirst(selectors) {
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && !el.disabled && el.offsetParent !== null) {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type !== "RECAP_CONTROL") return;
+    if (stopIfInvalid()) {
+      sendResponse({ ok: false });
+      return;
+    }
+    const video = getActiveVideo();
+    let ok = false;
+    switch (msg.action) {
+      case "play":
+        if (video) {
+          video.play().catch(() => {});
+          ok = true;
+        }
+        break;
+      case "pause":
+        if (video) {
+          video.pause();
+          ok = true;
+        }
+        break;
+      case "seek":
+        if (video && Number.isFinite(msg.value)) {
+          video.currentTime = Math.max(
+            0,
+            Math.min(msg.value, video.duration || msg.value),
+          );
+          // Guarda anti-bucle: un seek remoto no debe fabricar sesiones loop.
+          if (state.session) {
+            state.session.maxTimeReached = video.currentTime;
+          }
+          state.suppressRestartUntil = Date.now() + 2000;
+          ok = true;
+        }
+        break;
+      case "volume":
+        if (video && Number.isFinite(msg.value)) {
+          video.volume = Math.max(0, Math.min(1, msg.value));
+          if (video.volume > 0) video.muted = false;
+          ok = true;
+        }
+        break;
+      case "mute":
+        if (video) {
+          video.muted = !video.muted;
+          ok = true;
+        }
+        break;
+      case "loop":
+        if (video) {
+          video.loop = !video.loop;
+          ok = true;
+        }
+        break;
+      case "next":
+        ok = clickFirst([
+          ".ytp-next-button",
+          "ytmusic-player-bar .next-button",
+          ".next-button",
+        ]);
+        break;
+      case "prev":
+        ok = clickFirst([
+          ".ytp-prev-button",
+          "ytmusic-player-bar .previous-button",
+          ".previous-button",
+        ]);
+        break;
+      case "shuffle":
+        ok = clickFirst([
+          "ytmusic-player-bar .shuffle-button",
+          ".shuffle-button",
+        ]);
+        break;
+    }
+    sendResponse({ ok });
+  });
+
   // --- BÚSQUEDAS ---
   function handleSearchTracking() {
     const query =
@@ -384,12 +460,10 @@
         : isMusic && location.pathname === "/search"
           ? new URLSearchParams(location.search).get("q")?.trim()
           : "";
-
     if (!query) {
       state.activeSearchKey = null;
       return;
     }
-
     const key = `${source}::${query.toLowerCase()}`;
     if (state.activeSearchKey === key) return;
     state.activeSearchKey = key;
@@ -421,7 +495,7 @@
     });
   }
 
-  // --- INTERACCIONES (ME GUSTA Y SUSCRIPCIONES) ---
+  // --- INTERACCIONES ---
   function isLikeActive(btn) {
     if (!btn) return false;
     if (btn.getAttribute("aria-pressed") === "true") return true;
@@ -511,11 +585,9 @@
           const basePath = getChannelBasePath();
           const chInfo = basePath ? getChannelPageInfo(basePath) : null;
           const trackInfo = chInfo ? null : getTrackInfo();
-
           const name = chInfo?.name || trackInfo?.artist || "Canal de YouTube";
           const avatar = chInfo?.avatar || trackInfo?.artwork || "";
           const url = chInfo?.url || trackInfo?.channelUrl || "";
-
           saveInteraction({
             id: `sb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
             type: "subscribe",
@@ -564,7 +636,6 @@
       : document.querySelector(
           'ytd-browse[page-subtype="channels"]:not([hidden])',
         ) || document;
-
     const nameSelectors = isMusic
       ? [
           "ytmusic-immersive-header-renderer .title",
@@ -578,7 +649,6 @@
           "ytd-channel-name#channel-name #text",
           "#channel-name #text",
         ];
-
     const avatarSelectors = isMusic
       ? [
           "ytmusic-immersive-header-renderer img",
@@ -590,11 +660,9 @@
           "#channel-header #avatar img",
           "#channel-header img",
         ];
-
     const domName = findVisible(scope, nameSelectors);
     const avatar = findVisible(scope, avatarSelectors, "src");
     const handleFallback = basePath.startsWith("/@") ? basePath.slice(1) : "";
-
     return {
       domName,
       name: domName || handleFallback || "Canal de YouTube",
@@ -640,7 +708,6 @@
       state.pendingChannel = null;
       return;
     }
-
     const normPath = basePath.toLowerCase();
     if (state.channelVisit?.normPath === normPath) {
       if (state.channelVisit.ticks < 6) {
@@ -657,16 +724,13 @@
       }
       return;
     }
-
     if (!state.pendingChannel || state.pendingChannel.normPath !== normPath) {
       state.pendingChannel = { normPath, basePath, ticks: 0 };
     } else {
       state.pendingChannel.ticks += 1;
     }
-
     const info = getChannelPageInfo(basePath);
     if (!info.domName && state.pendingChannel.ticks < 2) return;
-
     state.channelVisit = {
       id: `ch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       normPath,
@@ -681,7 +745,7 @@
     saveChannelVisit(state.channelVisit, false);
   }
 
-  // --- SESIONES DE REPRODUCCIÓN ---
+  // --- SESIONES ---
   function createSession(info, video, isLoop = false) {
     const dur = Number.isFinite(video.duration)
       ? Math.round(video.duration)
@@ -692,7 +756,6 @@
     } else if (dur > 0 && dur < CONFIG.MIN_SECONDS_TO_COUNT) {
       minRequired = Math.max(5, Math.floor(dur * 0.8));
     }
-
     return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       ...info,
@@ -712,7 +775,6 @@
   function recordSkip(session) {
     if (stopIfInvalid() || !session || session.isLoop) return;
     if (session.seconds < 2 || session.seconds >= session.minRequired) return;
-
     const skipEntry = {
       id: `sk-${session.id}`,
       trackKey: session.trackKey,
@@ -729,7 +791,6 @@
       duration: session.duration || 0,
       timestamp: session.startedAt,
     };
-
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
       const data = await chrome.storage.local.get({ skips: [] });
@@ -750,7 +811,6 @@
       session.seconds - session.lastSavedSeconds < CONFIG.SAVE_INTERVAL_SEC
     )
       return;
-
     const avgRate =
       session.rateCount > 0
         ? Number((session.rateSum / session.rateCount).toFixed(2))
@@ -760,7 +820,6 @@
       session.duration > 0
         ? Math.min(100, Math.round((session.seconds / session.duration) * 100))
         : null;
-
     const snapshot = {
       id: session.id,
       trackKey: session.trackKey,
@@ -785,9 +844,7 @@
       isLoop: session.isLoop,
       timestamp: session.startedAt,
     };
-
     session.lastSavedSeconds = session.seconds;
-
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
       const data = await chrome.storage.local.get({ history: [] });
@@ -807,23 +864,17 @@
 
   async function publishNowPlaying(video, info) {
     if (stopIfInvalid() || !video || !info) return;
-
-    if (!npStorageKey) {
-      await ensureTabId();
-    }
+    if (!npStorageKey) await ensureTabId();
     const targetKey = npStorageKey || fallbackNpKey;
     if (stopIfInvalid()) return;
-
     try {
       const isPaused = Boolean(video.paused || video.ended);
       const isVisible = document.visibilityState === "visible";
       const sig = `${targetKey}|${isPaused}|${isVisible}|${info.videoId}|${info.title}`;
       if (isPaused && state.lastReportedSignature === sig) return;
-
       state.lastReportedSignature = sig;
       state.activeNpKey = targetKey;
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
-
       await chrome.storage.local.set({
         [targetKey]: {
           tabId: realTabId,
@@ -845,6 +896,7 @@
           paused: isPaused,
           visible: isVisible,
           muted: Boolean(video.muted || video.volume === 0),
+          volume: Number((video.volume || 0).toFixed(2)),
           playbackRate: Number((video.playbackRate || 1).toFixed(2)),
           loopActive: Boolean(video.loop),
           sessionSeconds: state.session ? state.session.seconds : 0,
@@ -868,13 +920,10 @@
 
   state.timerId = setInterval(() => {
     if (stopIfInvalid()) return;
-
     handleChannelTracking();
     handleSearchTracking();
-
     const video = getActiveVideo();
     if (video) bindVideoListeners(video);
-
     const info = getTrackInfo();
     if (!video || !info) {
       if (state.activeNpKey) {
@@ -885,17 +934,14 @@
       }
       return;
     }
-
     if (video.paused || video.ended || video.readyState < 2) {
       publishNowPlaying(video, info);
       return;
     }
-
     if (state.session && state.session.trackKey !== info.trackKey) {
       finalizeSession(state.session);
       state.session = null;
     }
-
     if (!state.session) {
       state.session = createSession(info, video, false);
     } else {
@@ -911,13 +957,13 @@
         s.videoId = info.videoId;
         s.videoUrl = info.videoUrl;
       }
-
       const dur = Number.isFinite(video.duration) ? video.duration : 0;
       if (dur > 0 && !s.duration) s.duration = Math.round(dur);
-
       const nearEnd = dur > 0 && s.maxTimeReached >= Math.max(5, dur - 8);
-      const restarted = s.maxTimeReached > 8 && video.currentTime < 5;
-
+      const restarted =
+        s.maxTimeReached > 8 &&
+        video.currentTime < 5 &&
+        Date.now() > state.suppressRestartUntil;
       if (restarted && (video.loop || nearEnd || s.seconds >= s.minRequired)) {
         const isActualLoop = Boolean(video.loop || nearEnd);
         finalizeSession(s);
@@ -932,7 +978,6 @@
         upsertSession(s, s.seconds === s.minRequired);
       }
     }
-
     publishNowPlaying(video, info);
   }, CONFIG.TICK_MS);
 
