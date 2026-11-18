@@ -1,4 +1,5 @@
 <!doctype html>
+<!doctype html>
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
@@ -51,7 +52,12 @@
         </div>
       </div>
 
-      <div id="statusBanner" class="status-banner" hidden></div>
+      <div
+        id="statusBanner"
+        class="status-banner"
+        aria-live="polite"
+        hidden
+      ></div>
 
       <!-- Tarjeta EN VIVO -->
       <div id="nowPlayingCard" class="now-playing">
@@ -123,24 +129,22 @@
           </select>
         </div>
       </section>
-
-      <nav class="tabs" aria-label="Secciones principales">
-        <button type="button" class="tab-btn active" data-tab="summary">
-          Resumen
-        </button>
-        <button type="button" class="tab-btn" data-tab="recent">
-          Reciente
-        </button>
-        <button type="button" class="tab-btn" data-tab="activity">Stats</button>
-        <button type="button" class="tab-btn" data-tab="calendar">
-          Calendario
-        </button>
-        <button type="button" class="tab-btn" data-tab="channels">
-          Canales
-        </button>
-        <button type="button" class="tab-btn" data-tab="likes">Likes</button>
-      </nav>
     </header>
+
+    <!-- FIX sticky: la nav va fuera del header para que su containing block
+         sea body y pueda quedarse pegada durante todo el scroll. -->
+    <nav class="tabs" aria-label="Secciones principales">
+      <button type="button" class="tab-btn active" data-tab="summary">
+        Resumen
+      </button>
+      <button type="button" class="tab-btn" data-tab="recent">Reciente</button>
+      <button type="button" class="tab-btn" data-tab="activity">Stats</button>
+      <button type="button" class="tab-btn" data-tab="calendar">
+        Calendario
+      </button>
+      <button type="button" class="tab-btn" data-tab="channels">Canales</button>
+      <button type="button" class="tab-btn" data-tab="likes">Likes</button>
+    </nav>
 
     <main id="appMain">
       <!-- TAB 1: RESUMEN -->

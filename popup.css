@@ -1,7 +1,14 @@
+/* ==========================================================================
+   MI RECAP — popup.css (v2)
+   Todo el código vive dentro de las capas declaradas (nada unlayered).
+   Fixes: sticky nav, sombra hack, Bento full-mode, focus ring con outline,
+   fades de mask, rampa heatmap AA, contrastes AA, targets 24px,
+   forced-colors completo, duplicados consolidados.
+   ========================================================================== */
 @layer tokens, base, layout, components, states;
 
 /* ==========================================================================
-   1. DESIGN TOKENS (ESCALA TIPOGRÁFICA, ESPACIADO DE 4PX Y COLORES)
+   1. DESIGN TOKENS
    ========================================================================== */
 @layer tokens {
   :root {
@@ -12,6 +19,10 @@
     --surface: #181818;
     --surface-2: #1f1f1f;
     --surface-hover: #252529;
+    --surface-hover-2: #2c2c32; /* hover fuerte / estado activo neutro */
+    --surface-active: #2e2025; /* pill activa (tinte cálido) */
+    --surface-pink: #2a1d21; /* mini-btn */
+    --surface-pink-hover: #3a242b;
     --surface-elevated: #221c21;
     --surface-inset: #131316;
 
@@ -25,6 +36,7 @@
     --text-secondary: #d1d5db;
     --text-muted: #a1a7b3;
     --text-faint: #7e8490;
+    --text-other-month: #7b818d; /* AA 4.54:1 sobre --surface (sin opacity) */
 
     /* Acentos */
     --accent-red: #ff4e45;
@@ -39,16 +51,26 @@
       var(--accent-pink)
     );
 
+    /* Rampa heatmap unificada (mes + año + leyenda).
+       Verificada AA: celdas 3.54–10.19:1 vs surface; textos 4.56–10.41:1.
+       heat-1 usa texto claro; heat-2..4 usan --heat-ink. */
+    --heat-1: #15803d;
+    --heat-2: #16a34a;
+    --heat-3: #22c55e;
+    --heat-4: var(--accent-green);
+    --heat-ink: #031a0e;
+
     /* Escala tipográfica */
     --fs-2xs: 10px;
     --fs-xs: 10.5px;
     --fs-sm: 11px;
     --fs-base: 12px;
     --fs-md: 12.5px;
+    --fs-title: 13px;
     --fs-lg: 14px;
     --fs-xl: 19px;
 
-    /* Sistema de espaciado (grilla de 4px) */
+    /* Escala de espaciado (pasos de 2px) */
     --space-1: 4px;
     --space-2: 6px;
     --space-3: 8px;
@@ -66,7 +88,8 @@
       0 10px 24px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --shadow-thumb: 0 4px 12px rgba(0, 0, 0, 0.45);
     --shadow-subtle: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    --focus-ring: 0 0 0 2px rgba(255, 107, 99, 0.62);
+    /* Outline (no box-shadow): no lo pisan los estados ni forced-colors */
+    --focus-ring: 2px solid rgba(255, 107, 99, 0.85);
 
     /* Movimiento */
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -85,8 +108,12 @@
     box-sizing: border-box;
     margin: 0;
     padding: 0;
+    /* Scrollbar estándar (Firefox / Chrome 121+) */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
   }
 
+  /* Scrollbar WebKit (Chrome < 121) */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -128,17 +155,20 @@
     outline: none;
   }
 
+  /* FIX focus ring: outline en vez de box-shadow.
+     Sobrevive a .tab-btn.active, .cal-day.today/.in-streak/.match-filter/
+     .selected, .yr-cell.match-filter y al modo forced-colors. */
   button:focus-visible,
   input:focus-visible,
   select:focus-visible,
   a:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
+    outline: var(--focus-ring);
+    outline-offset: 2px;
   }
 }
 
 /* ==========================================================================
-   3. LAYOUT DEL CONTENEDOR, MODO FULL (BENTO) Y STICKY NAV
+   3. LAYOUT DEL CONTENEDOR Y STICKY NAV
    ========================================================================== */
 @layer layout {
   body {
@@ -156,34 +186,20 @@
     font-size: var(--fs-base);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    padding: var(--space-6);
+    /* FIX sticky: padding-top 0 para que el contenido se clippee justo
+       donde se pega la nav (sin franja visible ni hack de sombra). */
+    padding: 0 var(--space-6) var(--space-6);
+  }
+
+  header {
+    padding-top: var(--space-6);
   }
 
   body.full-mode {
     width: 100%;
-    max-width: 780px;
+    max-width: 880px; /* consolidado (antes 780 + override 880) */
     max-height: none;
     margin: 16px auto;
-  }
-
-  /* Layout multi-columna Bento en modo completo */
-  body.full-mode #tab-activity:not([hidden]) {
-    align-items: stretch;
-  }
-
-  body.full-mode #tab-channels .stats-grid,
-  body.full-mode #tab-likes .stats-grid,
-  body.full-mode #tab-activity .activity-box:has(#hoursChart),
-  body.full-mode #tab-channels .cal-section:last-child,
-  body.full-mode #tab-likes .cal-section:last-child,
-  body.full-mode #calMonthView .calendar-box,
-  body.full-mode #calMonthView .cal-month-stats,
-  body.full-mode #calMonthView .cal-section {
-    grid-column: 1 / -1;
-  }
-
-  body.full-mode #tab-activity .activity-box:has(#hoursChart) {
-    order: -1;
   }
 
   .title-row {
@@ -225,7 +241,9 @@
     margin-bottom: var(--space-4);
   }
 
-  /* Barra de pestañas fija al scrollear */
+  /* Barra de pestañas fija al scrollear.
+     FIX: ahora es hija directa de body (ver HTML), así el containing block
+     es body y el sticky funciona durante todo el scroll. */
   .tabs {
     position: sticky;
     top: 0;
@@ -233,11 +251,12 @@
     display: flex;
     gap: 3px;
     margin-bottom: var(--space-5);
-    background: rgba(19, 19, 22, 0.88);
+    background: rgba(19, 19, 22, 0.94);
     backdrop-filter: blur(10px);
     border: 1px solid var(--border);
     padding: var(--space-1);
     border-radius: var(--radius-lg);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.55);
   }
 
   .stats-grid {
@@ -273,7 +292,7 @@
 }
 
 /* ==========================================================================
-   4. COMPONENTES (BOTONES, TARJETA EN VIVO, LISTAS, GRÁFICOS, CALENDARIO)
+   4. COMPONENTES
    ========================================================================== */
 @layer components {
   @keyframes livePulse {
@@ -286,7 +305,7 @@
     }
   }
 
-  /* Botones y selectores */
+  /* ---------- Botones y selectores ---------- */
   .pill-btn {
     background: var(--surface-2);
     color: var(--text);
@@ -303,7 +322,7 @@
   }
 
   .pill-btn:hover {
-    background: #2c2c32;
+    background: var(--surface-hover-2);
     border-color: rgba(255, 255, 255, 0.24);
   }
 
@@ -311,8 +330,19 @@
     transform: scale(0.97);
   }
 
+  .pill-btn.danger {
+    background: rgba(255, 78, 69, 0.18);
+    border-color: rgba(255, 78, 69, 0.45);
+    color: #fca5a5;
+  }
+
+  .pill-btn.danger:hover {
+    background: rgba(255, 78, 69, 0.32);
+    color: #fff;
+  }
+
   .mini-btn {
-    background: #2a1d21;
+    background: var(--surface-pink);
     color: var(--accent-pink);
     border: 1px solid rgba(255, 153, 204, 0.26);
     border-radius: var(--radius-pill);
@@ -327,7 +357,7 @@
   }
 
   .mini-btn:hover {
-    background: #3a242b;
+    background: var(--surface-pink-hover);
     border-color: rgba(255, 153, 204, 0.48);
   }
 
@@ -355,7 +385,7 @@
   }
 
   select:hover {
-    background-color: #26262b;
+    background-color: var(--surface-hover);
     border-color: var(--border-strong);
   }
 
@@ -384,7 +414,7 @@
     color: #fca5a5;
   }
 
-  /* Tarjeta En Vivo */
+  /* ---------- Tarjeta En Vivo ---------- */
   .now-playing {
     background: linear-gradient(145deg, #21151b 0%, #16161d 60%, #141720 100%);
     border: 1px solid rgba(255, 153, 204, 0.16);
@@ -509,7 +539,7 @@
   }
 
   .np-title {
-    font-size: 13px;
+    font-size: var(--fs-title);
     font-weight: 600;
     color: var(--text);
     user-select: text;
@@ -552,7 +582,7 @@
     font-weight: 600;
   }
 
-  /* Otras pestañas abiertas */
+  /* ---------- Otras pestañas abiertas ---------- */
   .np-other-wrap {
     margin-top: var(--space-3);
     padding-top: var(--space-3);
@@ -573,6 +603,14 @@
     gap: 5px;
     max-height: 120px;
     overflow-y: auto;
+    /* FIX fade: el padding-bottom absorbe la zona del mask cuando no hay
+       scroll o cuando se llegó al final de la lista. */
+    padding-bottom: 10px;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - 10px),
+      rgba(0, 0, 0, 0.48) 100%
+    );
     mask-image: linear-gradient(
       to bottom,
       #000 calc(100% - 10px),
@@ -652,7 +690,7 @@
     flex-shrink: 0;
   }
 
-  /* Pestañas y pills */
+  /* ---------- Pestañas y pills ---------- */
   .tab-btn {
     flex: 1;
     background: transparent;
@@ -675,7 +713,7 @@
   }
 
   .tab-btn.active {
-    background: #2c2c32;
+    background: var(--surface-hover-2);
     color: #fff;
     box-shadow:
       var(--shadow-subtle),
@@ -720,12 +758,24 @@
   }
 
   .sub-pill.active {
-    background: #2e2025;
+    background: var(--surface-active);
     color: #fff;
     border-color: rgba(255, 107, 99, 0.72);
   }
 
-  /* KPIs */
+  /* Pills compactas de la tab Reciente (ex "pulido visual extra") */
+  #tab-recent .sub-pills {
+    flex-wrap: nowrap;
+    gap: var(--space-1);
+  }
+
+  #tab-recent .sub-pill {
+    padding: var(--space-1) 7px;
+    font-size: var(--fs-xs);
+    white-space: nowrap;
+  }
+
+  /* ---------- KPIs ---------- */
   .stat-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -748,7 +798,7 @@
     color: var(--text);
   }
 
-  /* Listas y medallas del podio */
+  /* ---------- Listas y medallas del podio ---------- */
   .top-list {
     list-style: none;
     display: flex;
@@ -756,7 +806,13 @@
     gap: var(--space-2);
     max-height: 220px;
     overflow-y: auto;
-    padding-right: 2px;
+    /* FIX fade: padding-right original + padding-bottom que absorbe el mask */
+    padding: 0 2px 10px 0;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - 10px),
+      rgba(0, 0, 0, 0.52) 100%
+    );
     mask-image: linear-gradient(
       to bottom,
       #000 calc(100% - 10px),
@@ -948,7 +1004,7 @@
     transition: width var(--duration-base) var(--ease-out);
   }
 
-  /* Gráficos y Analítica */
+  /* ---------- Gráficos y Analítica ---------- */
   .activity-box {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -1034,13 +1090,38 @@
     opacity: 0.55;
   }
 
+  /* FIX alineación: grilla de 24 columnas idéntica a las barras,
+     cada label centrado sobre su hora exacta. */
   .hours-labels {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    gap: 3px;
     font-size: var(--fs-2xs);
     font-variant-numeric: tabular-nums;
     color: var(--text-faint);
     margin-top: 5px;
+  }
+
+  .hours-labels span {
+    justify-self: center;
+  }
+
+  .hours-labels span:nth-child(1) {
+    grid-column: 1;
+    justify-self: start;
+  }
+  .hours-labels span:nth-child(2) {
+    grid-column: 7;
+  }
+  .hours-labels span:nth-child(3) {
+    grid-column: 13;
+  }
+  .hours-labels span:nth-child(4) {
+    grid-column: 19;
+  }
+  .hours-labels span:nth-child(5) {
+    grid-column: 24;
+    justify-self: end;
   }
 
   .breakdown-grid {
@@ -1066,7 +1147,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Calendario y Vista Anual */
+  /* ---------- Calendario ---------- */
   .cal-toolbar {
     display: flex;
     gap: var(--space-3);
@@ -1102,7 +1183,7 @@
   }
 
   .cal-mode-btn.active {
-    background: #2c2c32;
+    background: var(--surface-hover-2);
     color: #fff;
   }
 
@@ -1197,7 +1278,7 @@
   }
 
   .cal-today-btn:hover {
-    background: #2e2e35;
+    background: var(--surface-hover-2);
     color: #fff;
   }
 
@@ -1217,7 +1298,7 @@
   }
 
   .cal-arrow-btn:hover {
-    background: #2f2f36;
+    background: var(--surface-hover-2);
   }
 
   .cal-arrow-btn:active {
@@ -1240,6 +1321,11 @@
     font-size: var(--fs-xs);
     color: var(--text-faint);
     font-weight: 600;
+  }
+
+  .cal-weekdays abbr {
+    text-decoration: none;
+    cursor: help;
   }
 
   .cal-day {
@@ -1272,29 +1358,32 @@
     transform: scale(0.95);
   }
 
+  /* FIX contraste: color sólido AA (4.54:1) en vez de opacity .48 (2.06:1) */
   .cal-day.other-month {
-    color: var(--text-faint);
-    opacity: 0.48;
+    color: var(--text-other-month);
   }
 
   .cal-day.today {
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36);
   }
 
+  /* Rampa heatmap unificada y AA (ver tokens) */
   .cal-day.heat-1 {
-    background: rgba(74, 222, 128, 0.14);
+    background: var(--heat-1);
   }
   .cal-day.heat-2 {
-    background: rgba(74, 222, 128, 0.3);
+    background: var(--heat-2);
+    color: var(--heat-ink);
+    font-weight: 600;
   }
   .cal-day.heat-3 {
-    background: rgba(74, 222, 128, 0.5);
-    color: #fff;
+    background: var(--heat-3);
+    color: var(--heat-ink);
     font-weight: 600;
   }
   .cal-day.heat-4 {
-    background: rgba(34, 197, 94, 0.8);
-    color: #052e16;
+    background: var(--heat-4);
+    color: var(--heat-ink);
     font-weight: 700;
   }
 
@@ -1308,6 +1397,7 @@
       inset 0 -2px 0 var(--accent-amber);
   }
 
+  /* Estado transitorio de filtrado (atenuación intencional) */
   .cal-day.dimmed {
     opacity: 0.24;
   }
@@ -1318,6 +1408,8 @@
       0 0 8px rgba(232, 121, 249, 0.25);
   }
 
+  /* !important necesario: gana a .today.in-streak (mayor especificidad).
+     El foco ya no depende de box-shadow (usa outline). */
   .cal-day.selected {
     box-shadow:
       inset 0 0 0 2px #fff,
@@ -1366,18 +1458,20 @@
     display: inline-block;
   }
 
+  /* Leyenda espejo exacto de las celdas (antes tenía otra rampa) */
   .leg-box.heat-1 {
-    background: rgba(74, 222, 128, 0.16);
+    background: var(--heat-1);
   }
   .leg-box.heat-2 {
-    background: rgba(74, 222, 128, 0.34);
+    background: var(--heat-2);
   }
   .leg-box.heat-3 {
-    background: rgba(74, 222, 128, 0.56);
+    background: var(--heat-3);
   }
   .leg-box.heat-4 {
-    background: rgba(34, 197, 94, 0.85);
+    background: var(--heat-4);
   }
+
   .leg-sep {
     margin: 0 3px;
   }
@@ -1475,7 +1569,7 @@
     transition: color var(--duration-fast) var(--ease-out);
   }
 
-  /* Vista Anual */
+  /* ---------- Vista Anual ---------- */
   .cal-year-stats {
     font-size: var(--fs-sm);
     font-variant-numeric: tabular-nums;
@@ -1486,6 +1580,13 @@
   .year-heatmap-scroll {
     overflow-x: auto;
     padding-bottom: var(--space-2);
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 0.65),
+      #000 10px,
+      #000 calc(100% - 10px),
+      rgba(0, 0, 0, 0.65)
+    );
     mask-image: linear-gradient(
       to right,
       rgba(0, 0, 0, 0.65),
@@ -1493,6 +1594,12 @@
       #000 calc(100% - 10px),
       rgba(0, 0, 0, 0.65)
     );
+  }
+
+  /* En full-mode el heatmap entra completo (686px < 824px): sin fade */
+  body.full-mode .year-heatmap-scroll {
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 
   .year-heatmap-grid {
@@ -1519,19 +1626,23 @@
 
   .yr-cell:hover {
     transform: scale(1.22);
+    position: relative;
+    z-index: 1; /* la celda escalada queda por encima de sus vecinas */
   }
+
   .yr-cell.heat-1 {
-    background: rgba(74, 222, 128, 0.25);
+    background: var(--heat-1);
   }
   .yr-cell.heat-2 {
-    background: rgba(74, 222, 128, 0.48);
+    background: var(--heat-2);
   }
   .yr-cell.heat-3 {
-    background: rgba(74, 222, 128, 0.72);
+    background: var(--heat-3);
   }
   .yr-cell.heat-4 {
-    background: #22c55e;
+    background: var(--heat-4);
   }
+
   .yr-cell.dimmed {
     opacity: 0.2;
   }
@@ -1573,8 +1684,9 @@
     transform: scale(0.98);
   }
 
+  /* FIX contraste: .75 (4.68:1) en vez de .5 (2.79:1) */
   .yr-month-card.empty {
-    opacity: 0.5;
+    opacity: 0.75;
   }
 
   .yr-m-name {
@@ -1590,7 +1702,7 @@
     color: var(--text-muted);
   }
 
-  /* Semanas */
+  /* ---------- Semanas ---------- */
   .weeks-list {
     display: flex;
     flex-direction: column;
@@ -1646,7 +1758,7 @@
     padding: 5px 7px;
   }
 
-  /* Estados vacíos y pie */
+  /* ---------- Estados vacíos y pie ---------- */
   .empty-msg {
     font-size: var(--fs-base);
     color: var(--text-muted);
@@ -1675,10 +1787,121 @@
   .danger-link:hover {
     color: #f87171;
   }
+
+  /* ---------- Animación de paneles ---------- */
+  @keyframes tabFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .tab-panel:not([hidden]) {
+    animation: tabFadeIn var(--duration-fast) var(--ease-out);
+  }
+
+  /* ---------- Modal oscuro nativo ---------- */
+  dialog.confirm-dialog {
+    margin: auto;
+    width: 315px;
+    max-width: calc(100vw - 2 * var(--space-6));
+    background: #18181d;
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xl);
+    box-shadow:
+      0 22px 48px rgba(0, 0, 0, 0.72),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    padding: var(--space-6);
+  }
+
+  dialog.confirm-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(4px);
+  }
+
+  .dialog-title {
+    font-size: var(--fs-lg);
+    color: var(--text);
+    margin-bottom: var(--space-2);
+  }
+
+  .dialog-desc {
+    font-size: var(--fs-base);
+    line-height: 1.45;
+    color: var(--text-muted);
+    margin-bottom: var(--space-5);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+
+  /* ---------- Target size mínimo 24px (WCAG 2.2) ----------
+     Scoped: no aplicar a button global (rompería .yr-cell de 10px). */
+  .pill-btn,
+  .mini-btn,
+  .sub-pill,
+  .cal-today-btn,
+  .cal-mode-btn,
+  .danger-link {
+    min-height: 24px;
+  }
+
+  /* ---------- LAYOUT BENTO FULL-MODE ----------
+     FIX: display: grid real en los contenedores (antes grid-column/order
+     eran inertos). Va al final de components para ganar a los margins
+     de .activity-box / .cal-section / .stats-grid. */
+  body.full-mode #tab-summary:not([hidden]) {
+    display: grid;
+    grid-template-columns: 310px minmax(0, 1fr);
+    gap: var(--space-5);
+    align-items: start;
+  }
+
+  body.full-mode #tab-summary .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    margin-bottom: 0;
+  }
+
+  body.full-mode
+    :is(#tab-activity, #tab-channels, #tab-likes, #calMonthView):not([hidden]) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-5);
+    align-items: stretch;
+  }
+
+  body.full-mode
+    :is(#tab-activity, #tab-channels, #tab-likes, #calMonthView)
+    > * {
+    margin-bottom: 0; /* el gap del grid ya separa */
+  }
+
+  body.full-mode #tab-activity .activity-box:has(#hoursChart) {
+    order: -1;
+  }
+
+  body.full-mode #tab-channels .stats-grid,
+  body.full-mode #tab-likes .stats-grid,
+  body.full-mode #tab-activity .activity-box:has(#hoursChart),
+  body.full-mode #tab-channels .cal-section:last-child,
+  body.full-mode #tab-likes .cal-section:last-child,
+  body.full-mode #calMonthView .calendar-box,
+  body.full-mode #calMonthView .cal-month-stats,
+  body.full-mode #calMonthView .cal-section {
+    grid-column: 1 / -1;
+  }
 }
 
 /* ==========================================================================
-   5. ESTADOS GLOBALES, HIGH CONTRAST WINDOWS 11 Y REDUCED MOTION
+   5. ESTADOS GLOBALES, FORCED-COLORS Y REDUCED MOTION
    ========================================================================== */
 @layer states {
   [hidden] {
@@ -1702,6 +1925,15 @@
       forced-color-adjust: none;
     }
 
+    /* FIX: el heatmap y la leyenda conservan sus colores de datos
+       (si no, quedaban todas las celdas idénticas en alto contraste). */
+    .cal-day:is(.heat-1, .heat-2, .heat-3, .heat-4),
+    .yr-cell:is(.heat-1, .heat-2, .heat-3, .heat-4),
+    .leg-box,
+    .cal-dot {
+      forced-color-adjust: none;
+    }
+
     .cal-day.selected,
     .tab-btn.active,
     .sub-pill.active,
@@ -1720,107 +1952,4 @@
       animation-iteration-count: 1 !important;
     }
   }
-}
-/* --- PULIDO VISUAL EXTRA --- */
-.cal-weekdays abbr {
-  text-decoration: none;
-  cursor: help;
-}
-
-#tab-recent .sub-pills {
-  flex-wrap: nowrap;
-  gap: var(--space-1);
-}
-
-#tab-recent .sub-pill {
-  padding: var(--space-1) 7px;
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-}
-
-.tabs {
-  background: rgba(19, 19, 22, 0.94);
-  box-shadow:
-    0 -14px 0 0 var(--bg),
-    0 8px 18px rgba(0, 0, 0, 0.55);
-}
-
-body.full-mode {
-  max-width: 880px;
-}
-
-body.full-mode #tab-summary:not([hidden]) {
-  display: grid;
-  grid-template-columns: 310px minmax(0, 1fr);
-  gap: var(--space-5);
-  align-items: start;
-}
-
-body.full-mode #tab-summary .stats-grid {
-  grid-template-columns: repeat(2, 1fr);
-  margin-bottom: 0;
-}
-
-@keyframes tabFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.tab-panel:not([hidden]) {
-  animation: tabFadeIn var(--duration-fast) var(--ease-out);
-}
-
-/* Modal oscuro nativo */
-dialog.confirm-dialog {
-  margin: auto;
-  width: 315px;
-  background: #18181d;
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  box-shadow:
-    0 22px 48px rgba(0, 0, 0, 0.72),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  padding: var(--space-6);
-}
-
-dialog.confirm-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.62);
-  backdrop-filter: blur(4px);
-}
-
-.dialog-title {
-  font-size: var(--fs-lg);
-  color: var(--text);
-  margin-bottom: var(--space-2);
-}
-
-.dialog-desc {
-  font-size: var(--fs-base);
-  line-height: 1.45;
-  color: var(--text-muted);
-  margin-bottom: var(--space-5);
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
-
-.pill-btn.danger {
-  background: rgba(255, 78, 69, 0.18);
-  border-color: rgba(255, 78, 69, 0.45);
-  color: #fca5a5;
-}
-
-.pill-btn.danger:hover {
-  background: rgba(255, 78, 69, 0.32);
-  color: #fff;
 }
