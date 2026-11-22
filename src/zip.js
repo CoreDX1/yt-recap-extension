@@ -1,3 +1,5 @@
+// src/zip.js
+
 const CRC32_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {

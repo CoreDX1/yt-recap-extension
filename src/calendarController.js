@@ -1,4 +1,5 @@
 // src/calendarController.js
+
 import { toDateKey } from "./utils.js";
 
 export function bindCalendarControls(dom, uiState, rerender) {

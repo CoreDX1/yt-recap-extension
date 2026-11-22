@@ -1,4 +1,5 @@
 // src/icons.js
+
 const P = (d, extra = "") => `<path d="${d}" ${extra} />`;
 
 const PATHS = {

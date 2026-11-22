@@ -1,4 +1,5 @@
 // src/monogram.js
+
 function hash(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) {

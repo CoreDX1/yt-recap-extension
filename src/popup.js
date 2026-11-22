@@ -1,4 +1,5 @@
 // src/popup.js — v2.5.1 (ajuste opcional del PATCH C: debounce mayor + skip si oculto)
+
 import {
   translateCategory,
   toDateKey,

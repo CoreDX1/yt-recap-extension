@@ -1,4 +1,5 @@
 // src/full.js — v2.7
+
 import {
   translateCategory,
   toDateKey,
@@ -2714,20 +2715,18 @@ function renderPersonDetail(host, name) {
       span: 12,
     });
     const list = el("div", "pt");
-    detail.likes
-      .slice(0, 20)
-      .forEach((it, i) =>
-        list.append(
-          rankRow({
-            rank: i + 1,
-            thumb: it.artwork,
-            name: it.title,
-            sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
-            value: "Abrir ↗",
-            href: it.videoUrl,
-          }),
-        ),
-      );
+    detail.likes.slice(0, 20).forEach((it, i) =>
+      list.append(
+        rankRow({
+          rank: i + 1,
+          thumb: it.artwork,
+          name: it.title,
+          sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
+          value: "Abrir ↗",
+          href: it.videoUrl,
+        }),
+      ),
+    );
     p._body.append(list);
     host.append(p);
   }
@@ -2900,21 +2899,19 @@ function paintLikesBody() {
       );
     else {
       const list = el("div", "pt");
-      vm.subs
-        .slice(0, 8)
-        .forEach((it, i) =>
-          list.append(
-            rankRow({
-              rank: i + 1,
-              thumb: it.artwork,
-              round: true,
-              name: it.title,
-              sub: relativeTime(it.timestamp),
-              value: "Canal ↗",
-              href: it.channelUrl,
-            }),
-          ),
-        );
+      vm.subs.slice(0, 8).forEach((it, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: it.artwork,
+            round: true,
+            name: it.title,
+            sub: relativeTime(it.timestamp),
+            value: "Canal ↗",
+            href: it.channelUrl,
+          }),
+        ),
+      );
       rail._body.append(list);
     }
     grid.append(rail);

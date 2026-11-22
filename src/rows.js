@@ -1,4 +1,5 @@
 // src/rows.js
+
 import { translateCategory, formatShortDateTime } from "./utils.js";
 
 export function buildTrackRow(

@@ -1,3 +1,5 @@
+// src/background.js
+
 const YT_URLS = ["https://www.youtube.com/*", "https://music.youtube.com/*"];
 
 chrome.runtime.onInstalled.addListener(async () => {

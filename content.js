@@ -1,4 +1,5 @@
 // content.js
+
 (() => {
   if (typeof window.__ytRecapCleanup === "function") {
     window.__ytRecapCleanup();

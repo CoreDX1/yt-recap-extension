@@ -1,3 +1,5 @@
+// src/utils.js
+
 export const CATEGORY_LABELS = {
   Music: "Música",
   Gaming: "Videojuegos",

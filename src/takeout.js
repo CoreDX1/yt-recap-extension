@@ -1,3 +1,5 @@
+// src/takeout.js
+
 function parseTakeoutWatchHistory(entries) {
   const imported = [];
   for (const item of entries) {

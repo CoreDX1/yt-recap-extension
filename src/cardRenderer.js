@@ -1,3 +1,5 @@
+// src/cardRenderer.js
+
 import { formatDuration } from "./utils.js";
 
 async function loadImageBitmapSafe(url) {
