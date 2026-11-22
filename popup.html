@@ -35,12 +35,6 @@
           >
             Importar
           </button>
-          <input
-            id="importInput"
-            type="file"
-            accept=".json,.zip,application/json,application/zip"
-            hidden
-          />
           <button
             id="exportBtn"
             type="button"
@@ -394,36 +388,6 @@
         Borrar historial local
       </button>
     </footer>
-    <template id="trackRowTpl">
-      <li class="top-item">
-        <span class="rank"></span>
-        <img class="thumb" loading="lazy" decoding="async" alt="" />
-        <div class="meta">
-          <div class="track-title"></div>
-          <div class="track-sub"></div>
-        </div>
-        <div class="track-stats"></div>
-      </li>
-    </template>
-    <template id="otherTabTpl">
-      <li>
-        <button type="button" class="np-other-btn">
-          <span class="np-other-state"></span>
-          <img
-            class="np-other-thumb"
-            width="24"
-            height="24"
-            decoding="async"
-            alt=""
-          />
-          <div class="meta">
-            <div class="np-other-title"></div>
-            <div class="np-other-sub"></div>
-          </div>
-          <span class="np-other-time"></span>
-        </button>
-      </li>
-    </template>
     <dialog id="confirmClearDialog" class="confirm-dialog">
       <h2 class="dialog-title">¿Borrar historial local?</h2>
       <p class="dialog-desc">

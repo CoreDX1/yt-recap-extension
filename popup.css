@@ -195,13 +195,6 @@
     padding-top: var(--space-6);
   }
 
-  body.full-mode {
-    width: 100%;
-    max-width: 880px; /* consolidado (antes 780 + override 880) */
-    max-height: none;
-    margin: 16px auto;
-  }
-
   .title-row {
     display: flex;
     justify-content: space-between;
@@ -830,18 +823,6 @@
 
   .top-list.compact {
     max-height: 175px;
-  }
-
-  body.full-mode .top-list {
-    max-height: 460px;
-  }
-
-  body.full-mode .top-list.tall {
-    max-height: 64vh;
-  }
-
-  body.full-mode .top-list.compact {
-    max-height: 320px;
   }
 
   .top-item {
@@ -1601,10 +1582,6 @@
   }
 
   /* En full-mode el heatmap entra completo (686px < 824px): sin fade */
-  body.full-mode .year-heatmap-scroll {
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
 
   .year-heatmap-grid {
     display: grid;
@@ -1877,51 +1854,6 @@
   .cal-mode-btn,
   .danger-link {
     min-height: 24px;
-  }
-
-  /* ---------- LAYOUT BENTO FULL-MODE ----------
-     FIX: display: grid real en los contenedores (antes grid-column/order
-     eran inertos). Va al final de components para ganar a los margins
-     de .activity-box / .cal-section / .stats-grid. */
-  body.full-mode #tab-summary:not([hidden]) {
-    display: grid;
-    grid-template-columns: 310px minmax(0, 1fr);
-    gap: var(--space-5);
-    align-items: start;
-  }
-
-  body.full-mode #tab-summary .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-    margin-bottom: 0;
-  }
-
-  body.full-mode
-    :is(#tab-activity, #tab-channels, #tab-likes, #calMonthView):not([hidden]) {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-5);
-    align-items: stretch;
-  }
-
-  body.full-mode
-    :is(#tab-activity, #tab-channels, #tab-likes, #calMonthView)
-    > * {
-    margin-bottom: 0; /* el gap del grid ya separa */
-  }
-
-  body.full-mode #tab-activity .activity-box:has(#hoursChart) {
-    order: -1;
-  }
-
-  body.full-mode #tab-channels .stats-grid,
-  body.full-mode #tab-likes .stats-grid,
-  body.full-mode #tab-activity .activity-box:has(#hoursChart),
-  body.full-mode #tab-channels .cal-section:last-child,
-  body.full-mode #tab-likes .cal-section:last-child,
-  body.full-mode #calMonthView .calendar-box,
-  body.full-mode #calMonthView .cal-month-stats,
-  body.full-mode #calMonthView .cal-section {
-    grid-column: 1 / -1;
   }
 }
 

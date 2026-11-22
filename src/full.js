@@ -11,6 +11,7 @@ import {
   aggregateTracks,
   getGroupKey,
   isMusicItem,
+  buildIndex,
 } from "./utils.js";
 import {
   buildTrackRow,
@@ -26,10 +27,11 @@ import {
   downloadBlob,
   exportPngCard,
   buildExportZip,
-  importFromFile,
   enrichImported,
   NowPlaying,
   emptyStore,
+  persistStore,
+  clearAllData,
 } from "./recapStore.js";
 import {
   summaryVM,
@@ -107,6 +109,83 @@ let memoSigKey = null;
 const memo = new Map();
 let ANIM = false;
 const countUps = new Set();
+
+let dataIndex = null;
+let dataIndexKey = null;
+let dataViewCache = null;
+let dataViewKey = null;
+let dirTimer = null;
+let lastPlayerSig = "";
+let lastQueueSig = "";
+
+function getDataIndex() {
+  const k = `${store.history.length}|${store.interactions.length}|${store.searches.length}|${store.channelVisits.length}|${store.skips.length}`;
+  if (!dataIndex || dataIndexKey !== k) {
+    dataIndex = buildIndex(store);
+    dataIndexKey = k;
+    dataViewCache = null;
+  }
+  return dataIndex;
+}
+
+function dataView() {
+  const idx = getDataIndex();
+  const scope = scopeValue();
+  const key = `${scope}|${state.period}`;
+  if (dataViewCache && dataViewKey === key) return dataViewCache;
+  const cutoff =
+    state.period === "all" ? 0 : Date.now() - Number(state.period) * 86400000;
+  const plays = [],
+    inter = [],
+    searches = [],
+    visits = [],
+    skips = [];
+  for (const [dk, b] of idx.byDay) {
+    if (cutoff && Date.parse(`${dk}T23:59:59`) < cutoff) continue;
+    for (const p of b.plays)
+      if (matchesFilter(p, state.period, scope, true)) plays.push(p);
+    for (const sk of b.skips)
+      if (matchesFilter(sk, state.period, scope, true)) skips.push(sk);
+    for (const it of b.inter)
+      if (matchesPeriodAndSourceOnly(it, state.period, scope, true))
+        inter.push(it);
+    for (const s of b.searches)
+      if (matchesPeriodAndSourceOnly(s, state.period, scope, true))
+        searches.push(s);
+    for (const v of b.visits)
+      if (matchesPeriodAndSourceOnly(v, state.period, scope, true))
+        visits.push(v);
+  }
+  const allPlays = [],
+    allInter = [],
+    allSearches = [],
+    allVisits = [];
+  for (const [, b] of idx.byDay) {
+    for (const p of b.plays)
+      if (matchesFilter(p, "all", scope, false)) allPlays.push(p);
+    for (const it of b.inter)
+      if (matchesPeriodAndSourceOnly(it, "all", scope, false))
+        allInter.push(it);
+    for (const s of b.searches)
+      if (matchesPeriodAndSourceOnly(s, "all", scope, false))
+        allSearches.push(s);
+    for (const v of b.visits)
+      if (matchesPeriodAndSourceOnly(v, "all", scope, false)) allVisits.push(v);
+  }
+  dataViewCache = {
+    plays,
+    inter,
+    searches,
+    visits,
+    skips,
+    allPlays,
+    allInter,
+    allSearches,
+    allVisits,
+  };
+  dataViewKey = key;
+  return dataViewCache;
+}
 
 const calUi = {
   calViewMode: "month",
@@ -255,36 +334,51 @@ function isMusicScope() {
   return state.scope === "music";
 }
 function periodPlays() {
-  return store.history.filter((it) =>
-    matchesFilter(it, state.period, scopeValue(), true),
-  );
+  return dataView().plays;
 }
 function allPlays() {
-  return store.history.filter((it) =>
-    matchesFilter(it, "all", scopeValue(), false),
-  );
+  return dataView().allPlays;
 }
 function meta(items) {
+  const v = dataView();
+  if (items === store.interactions) return v.inter;
+  if (items === store.searches) return v.searches;
+  if (items === store.channelVisits) return v.visits;
   return items.filter((it) =>
     matchesPeriodAndSourceOnly(it, state.period, scopeValue(), true),
   );
 }
 function metaAll(items) {
+  const v = dataView();
+  if (items === store.interactions) return v.allInter;
+  if (items === store.searches) return v.allSearches;
+  if (items === store.channelVisits) return v.allVisits;
   return items.filter((it) =>
     matchesPeriodAndSourceOnly(it, "all", scopeValue(), false),
   );
 }
 function prevPeriodPlays() {
   if (state.period === "all") return [];
-  const days = Number(state.period),
-    now = Date.now(),
-    from = now - days * 86400000;
-  return store.history.filter(
-    (it) =>
-      matchesFilter(it, "all", scopeValue(), false) &&
-      it.timestamp >= from - days * 86400000 &&
-      it.timestamp < from,
-  );
+  const days = Number(state.period);
+  const now = Date.now();
+  const from = now - days * 86400000;
+  const prevFrom = from - days * 86400000;
+  const scope = scopeValue();
+  const idx = getDataIndex();
+  const out = [];
+  for (const [dk, b] of idx.byDay) {
+    const t = Date.parse(`${dk}T12:00:00`);
+    if (t < prevFrom - 86400000 || t > from + 86400000) continue;
+    for (const p of b.plays) {
+      if (
+        p.timestamp >= prevFrom &&
+        p.timestamp < from &&
+        matchesFilter(p, "all", scope, false)
+      )
+        out.push(p);
+    }
+  }
+  return out;
 }
 function periodLabel() {
   return PERIODS.find(([v]) => v === state.period)?.[1] || "Mi Recap";
@@ -386,46 +480,19 @@ function countUp(node, to, fmt) {
 
 // ---------- firmas + memo ----------
 function computeSigs() {
-  const plays = periodPlays(),
-    inter = meta(store.interactions),
-    searches = meta(store.searches),
-    visits = meta(store.channelVisits);
-  let sh = 0;
-  for (const p of plays)
-    sh =
-      (sh * 31 +
-        hashStr(
-          `${p.trackKey}|${p.title}|${p.artist}|${p.contentType}|${p.category}|${p.isMusic ? 1 : 0}`,
-        )) |
-      0;
-  let ih = 0;
-  for (const it of inter) ih = (ih * 31 + hashStr(it.id + it.type)) | 0;
-  let se = 0;
-  for (const s of searches) se = (se * 31 + hashStr(s.id)) | 0;
-  let vi = 0;
-  for (const v of visits) vi = (vi * 31 + hashStr(v.id)) | 0;
-  let struct = `${state.scope}|${state.route}|${state.detail || ""}|${state.period}|${state.peopleSort}|${state.peopleMinSec}|${state.peopleQuery}|${state.likesTab}|${state.hoursMode}|${state.showGhost}|${plays.length}|${sh}|${inter.length}|${ih}|${searches.length}|${se}|${visits.length}|${vi}`;
-
+  const idx = getDataIndex();
+  const v = dataView();
+  const plays = v.plays;
+  let struct = `${state.scope}|${state.route}|${state.detail || ""}|${state.period}|${state.peopleSort}|${state.peopleMinSec}|${state.peopleQuery}|${state.likesTab}|${state.hoursMode}|${state.showGhost}|${idx.sig}`;
   if (state.route === "calendar") {
-    const buckets = new Map();
-    for (const p of allPlays()) {
-      const k = toDateKey(new Date(p.timestamp));
-      buckets.set(k, (buckets.get(k) || 0) + (p.seconds || 0));
-    }
-    const touch = (k) => {
-      if (!buckets.has(k)) buckets.set(k, 0);
-    };
-    for (const it of metaAll(store.interactions))
-      touch(toDateKey(new Date(it.timestamp)));
-    for (const s of metaAll(store.searches))
-      touch(toDateKey(new Date(s.timestamp)));
     let hh = 0;
-    for (const k of [...buckets.keys()].sort()) {
-      hh = (hh * 31 + hashStr(`${k}:${Math.round(buckets.get(k) / 60)}`)) | 0;
+    for (const [dk, b] of idx.byDay) {
+      const has = b.plays.length || b.inter.length || b.searches.length;
+      if (!has) continue;
+      hh = (hh * 31 + hashStr(`${dk}:${Math.round(b.sec / 60)}`)) | 0;
     }
     struct += `|cal${hh}|${calUi.calYear}|${calUi.calMonth}|${calUi.calViewMode}|${calUi.selectedDateKey}|${calUi.calDayMode}|${calUi.calSearchQuery}|${calUi.calScale}|${calUi.calLevelFilter ?? "x"}|${calUi.calRangeAnchor || ""}|${calUi.calRangeEnd || ""}|${calUi.calWeekOpen ?? "x"}|${calUi.calYrZoom}`;
   }
-
   let totalSeconds = 0,
     loops = 0;
   const hours = new Array(24).fill(0);
@@ -459,15 +526,14 @@ const vmHome = () =>
       metaAll(store.channelVisits),
     ),
   );
+
 const vmActivity = () =>
   memoVM("activity", () =>
     activityVM(
       periodPlays(),
       meta(store.interactions),
       meta(store.searches),
-      store.skips.filter((it) =>
-        matchesFilter(it, state.period, scopeValue(), true),
-      ),
+      dataView().skips,
     ),
   );
 const vmInsights = () =>
@@ -2476,7 +2542,6 @@ function renderPeople() {
     "aria-label",
     music ? "Filtrar artistas" : "Filtrar canales",
   );
-  let dirTimer = null;
   search.addEventListener("input", () => {
     if (dirTimer) clearTimeout(dirTimer);
     dirTimer = setTimeout(() => {
@@ -3187,6 +3252,7 @@ function renderAll() {
   updateAmbient();
 }
 function refreshData() {
+  if (document.hidden) return;
   const sigs = computeSigs(),
     prev = state.sigs;
   state.sigs = sigs;
@@ -3199,135 +3265,191 @@ function refreshData() {
   } else if (prev.metrics !== sigs.metrics) updateMetricsInPlace();
 }
 
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshData();
+    renderPlayer();
+  }
+});
+
 // ---------- playerbar + now playing ----------
 function renderPlayer() {
   const sel = npService.select(state.pinnedNpTabId);
   const np = sel?.primary || null;
   state.currentNp = np;
   state.currentTabId = np?.tabId ?? null;
+
+  const updateSeek = () => {
+    if (!np) {
+      els.pbSeek.value = 0;
+      els.pbSeek.style.setProperty("--pb-fill", "0%");
+      els.pbTime.textContent = "0:00";
+      if (els.pbTimeTotal) els.pbTimeTotal.textContent = "0:00";
+      return;
+    }
+    if (!state.seeking) {
+      const vol = Math.round((np.muted ? 0 : (np.volume ?? 1)) * 100);
+      els.pbVol.value = vol;
+      els.pbVol.style.setProperty("--pb-vol", `${vol}%`);
+      els.pbVol.setAttribute("aria-valuetext", `${vol}%`);
+      const pct = np.duration > 0 ? np.currentTime / np.duration : 0;
+      els.pbSeek.value = Math.round(pct * 1000);
+      els.pbSeek.style.setProperty("--pb-fill", `${(pct * 100).toFixed(2)}%`);
+      els.pbSeek.setAttribute(
+        "aria-valuetext",
+        np.duration > 0
+          ? `${formatClock(np.currentTime)} de ${formatClock(np.duration)}`
+          : formatClock(np.currentTime),
+      );
+    }
+    els.pbTime.textContent = formatClock(np.currentTime);
+    if (els.pbTimeTotal)
+      els.pbTimeTotal.textContent =
+        np.duration > 0 ? formatClock(np.duration) : "0:00";
+  };
+
   if (!np) {
-    els.pbTitle.textContent = "Nada reproduciéndose ahora";
-    els.pbArtist.textContent = "Abrí YouTube o YT Music en otra pestaña";
-    els.pbThumb.removeAttribute("src");
-    els.pbSource.hidden = true;
-    els.pbLoopBadge.hidden = true;
-    els.pbPinned.hidden = true;
-    els.pbStale.hidden = true;
-    els.pbTime.textContent = "0:00";
-    els.pbTimeTotal.textContent = "0:00";
-    els.pbSeek.value = 0;
-    els.pbSeek.style.setProperty("--pb-fill", "0%");
-    els.pbPlay.innerHTML = icon("play", 18);
-    els.pbLike.innerHTML = icon("heart", 18);
-    els.pbLike.classList.remove("on");
-    els.npArt.removeAttribute("src");
-    els.npTitle.textContent = "Nada reproduciéndose";
-    els.npArtist.textContent = "Abrí YouTube o YT Music";
-    els.npSource.textContent = "—";
-    els.npLoopBadge.hidden = true;
-    els.npPinned.hidden = true;
-    els.npStale.hidden = true;
-    els.npPlay.innerHTML = icon("play", 22);
-    els.npLike.innerHTML = icon("heart", 18);
-    els.npLike.classList.remove("on");
-    els.npMeta.replaceChildren();
-    els.npCount.textContent = "";
-    els.npCount.classList.remove("saved");
+    if (lastPlayerSig !== "none") {
+      lastPlayerSig = "none";
+      els.pbTitle.textContent = "Nada reproduciéndose ahora";
+      els.pbArtist.textContent = "Abrí YouTube o YT Music en otra pestaña";
+      els.pbThumb.removeAttribute("src");
+      els.pbSource.hidden = true;
+      els.pbLoopBadge.hidden = true;
+      els.pbPinned.hidden = true;
+      els.pbStale.hidden = true;
+      els.pbPlay.innerHTML = icon("play", 18);
+      els.pbLike.innerHTML = icon("heart", 18);
+      els.pbLike.classList.remove("on");
+      els.npArt.removeAttribute("src");
+      els.npTitle.textContent = "Nada reproduciéndose";
+      els.npArtist.textContent = "Abrí YouTube o YT Music";
+      els.npSource.textContent = "—";
+      els.npLoopBadge.hidden = true;
+      els.npPinned.hidden = true;
+      els.npStale.hidden = true;
+      els.npPlay.innerHTML = icon("play", 22);
+      els.npLike.innerHTML = icon("heart", 18);
+      els.npLike.classList.remove("on");
+      els.npMeta.replaceChildren();
+      els.npCount.textContent = "";
+      els.npCount.classList.remove("saved");
+    }
+    updateSeek();
     renderQueue([]);
     return;
   }
-  if (np.artwork) {
-    els.pbThumb.src = np.artwork;
-    els.npArt.src = np.artwork;
-  } else {
-    els.pbThumb.removeAttribute("src");
-    els.npArt.removeAttribute("src");
-  }
-  els.pbTitle.textContent = np.title;
-  els.pbArtist.textContent = np.album
-    ? `${np.artist} · ${np.album}`
-    : np.artist;
-  els.npTitle.textContent = np.title;
-  els.npArtist.textContent = np.album
-    ? `${np.artist} · ${np.album}`
-    : np.artist;
-  const srcLabel =
-    np.source === "yt_music"
-      ? "YT Music"
-      : np.isMusic
-        ? "YouTube · Música"
-        : "YouTube";
-  els.pbSource.hidden = false;
-  els.pbSource.textContent = srcLabel;
-  els.npSource.textContent = srcLabel;
-  els.pbLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
-  els.npLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
-  els.pbPinned.hidden = state.pinnedNpTabId == null;
-  els.npPinned.hidden = state.pinnedNpTabId == null;
+
   const stale = !np.paused && Date.now() - np.updatedAt > 90000;
-  els.pbStale.hidden = !stale;
-  els.npStale.hidden = !stale;
-  els.pbPlay.innerHTML = icon(np.paused ? "play" : "pause", 18);
-  els.npPlay.innerHTML = icon(np.paused ? "play" : "pause", 22);
-  els.pbMute.innerHTML = icon(np.muted ? "mute" : "volume", 18);
-  els.pbLoop.classList.toggle("on", Boolean(np.loopActive || np.isLoopSession));
-  els.pbLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
-  els.pbLike.classList.toggle("on", np.liked === true);
-  els.npLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
-  els.npLike.classList.toggle("on", np.liked === true);
-  els.pbLike.title =
-    np.liked == null
-      ? "Estado de like no disponible en esta pestaña"
-      : np.liked
-        ? "Quitar Me gusta"
-        : "Dar Me gusta";
-  if (!state.seeking) {
-    const vol = Math.round((np.muted ? 0 : (np.volume ?? 1)) * 100);
-    els.pbVol.value = vol;
-    els.pbVol.style.setProperty("--pb-vol", `${vol}%`);
-    els.pbVol.setAttribute("aria-valuetext", `${vol}%`);
-    const pct = np.duration > 0 ? np.currentTime / np.duration : 0;
-    els.pbSeek.value = Math.round(pct * 1000);
-    els.pbSeek.style.setProperty("--pb-fill", `${(pct * 100).toFixed(2)}%`);
-    els.pbSeek.setAttribute(
-      "aria-valuetext",
-      np.duration > 0
-        ? `${formatClock(np.currentTime)} de ${formatClock(np.duration)}`
-        : formatClock(np.currentTime),
+  const sig = [
+    np.storageKey || np.tabId,
+    np.paused,
+    np.muted,
+    np.loopActive,
+    np.liked,
+    np.title,
+    np.artist,
+    np.album,
+    np.artwork,
+    np.source,
+    np.isMusic,
+    np.category,
+    np.contentType,
+    np.context,
+    np.playbackRate,
+    state.pinnedNpTabId,
+    np.sessionSeconds,
+    np.minRequired,
+    np.isLoopSession,
+    stale,
+  ].join("|");
+
+  if (sig !== lastPlayerSig) {
+    lastPlayerSig = sig;
+    if (np.artwork) {
+      els.pbThumb.src = np.artwork;
+      els.npArt.src = np.artwork;
+    } else {
+      els.pbThumb.removeAttribute("src");
+      els.npArt.removeAttribute("src");
+    }
+    els.pbTitle.textContent = np.title;
+    els.pbArtist.textContent = np.album
+      ? `${np.artist} · ${np.album}`
+      : np.artist;
+    els.npTitle.textContent = np.title;
+    els.npArtist.textContent = np.album
+      ? `${np.artist} · ${np.album}`
+      : np.artist;
+    const srcLabel =
+      np.source === "yt_music"
+        ? "YT Music"
+        : np.isMusic
+          ? "YouTube · Música"
+          : "YouTube";
+    els.pbSource.hidden = false;
+    els.pbSource.textContent = srcLabel;
+    els.npSource.textContent = srcLabel;
+    els.pbLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
+    els.npLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
+    els.pbPinned.hidden = state.pinnedNpTabId == null;
+    els.npPinned.hidden = state.pinnedNpTabId == null;
+    els.pbStale.hidden = !stale;
+    els.npStale.hidden = !stale;
+    els.pbPlay.innerHTML = icon(np.paused ? "play" : "pause", 18);
+    els.npPlay.innerHTML = icon(np.paused ? "play" : "pause", 22);
+    els.pbMute.innerHTML = icon(np.muted ? "mute" : "volume", 18);
+    els.pbLoop.classList.toggle(
+      "on",
+      Boolean(np.loopActive || np.isLoopSession),
+    );
+    els.pbLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
+    els.pbLike.classList.toggle("on", np.liked === true);
+    els.npLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
+    els.npLike.classList.toggle("on", np.liked === true);
+    els.pbLike.title =
+      np.liked == null
+        ? "Estado de like no disponible en esta pestaña"
+        : np.liked
+          ? "Quitar Me gusta"
+          : "Dar Me gusta";
+    const remaining = Math.max(
+      0,
+      (np.minRequired || 20) - (np.sessionSeconds || 0),
+    );
+    if (remaining === 0) {
+      els.npCount.textContent = "✓ Registrado en tu recap";
+      els.npCount.classList.add("saved");
+    } else {
+      els.npCount.textContent = `Se registra en ${remaining}s`;
+      els.npCount.classList.remove("saved");
+    }
+    const metaBits = [];
+    if (np.category) metaBits.push(translateCategory(np.category));
+    if (np.contentType === "short") metaBits.push("Short");
+    else if (np.contentType === "live") metaBits.push("En vivo");
+    if (np.context === "mix") metaBits.push("Mix");
+    else if (np.context === "playlist") metaBits.push("Playlist");
+    if (np.playbackRate && np.playbackRate !== 1)
+      metaBits.push(`${np.playbackRate}x`);
+    els.npMeta.replaceChildren(
+      ...metaBits.map((t) => el("span", "badge source", t)),
     );
   }
-  els.pbTime.textContent = formatClock(np.currentTime);
-  els.pbTimeTotal.textContent =
-    np.duration > 0 ? formatClock(np.duration) : "0:00";
-  const remaining = Math.max(
-    0,
-    (np.minRequired || 20) - (np.sessionSeconds || 0),
-  );
-  if (remaining === 0) {
-    els.npCount.textContent = "✓ Registrado en tu recap";
-    els.npCount.classList.add("saved");
-  } else {
-    els.npCount.textContent = `Se registra en ${remaining}s`;
-    els.npCount.classList.remove("saved");
-  }
-  const metaBits = [];
-  if (np.category) metaBits.push(translateCategory(np.category));
-  if (np.contentType === "short") metaBits.push("Short");
-  else if (np.contentType === "live") metaBits.push("En vivo");
-  if (np.context === "mix") metaBits.push("Mix");
-  else if (np.context === "playlist") metaBits.push("Playlist");
-  if (np.playbackRate && np.playbackRate !== 1)
-    metaBits.push(`${np.playbackRate}x`);
-  els.npMeta.replaceChildren(
-    ...metaBits.map((t) => {
-      const b = el("span", "badge source", t);
-      return b;
-    }),
-  );
+  updateSeek();
   renderQueue(sel?.others || []);
 }
 function renderQueue(others) {
   if (els.npPanel.hidden) return;
+  const qsig =
+    others
+      .map(
+        (t) =>
+          `${t.storageKey || t.tabId}|${t.paused}|${t.title}|${Math.floor(t.currentTime)}`,
+      )
+      .join(",") + `|${state.pinnedNpTabId}`;
+  if (qsig === lastQueueSig) return;
+  lastQueueSig = qsig;
   const nodes = [el("div", "queue-title", `Otras pestañas (${others.length})`)];
   if (!others.length)
     nodes.push(
@@ -3942,7 +4064,7 @@ els.importInput.addEventListener("change", async (e) => {
   if (!file) return;
   try {
     const { updatedData, message } = await importFromFile(file, store);
-    await chrome.storage.local.set(updatedData);
+    await persistStore(updatedData);
     Object.assign(store, updatedData);
     if (migrateMusicFlags(store)) await persistMusicFlags(store);
     state.animateNext = true;
@@ -4020,15 +4142,17 @@ els.cancelClearBtn.addEventListener("click", () =>
 els.confirmClearDialog.addEventListener("click", (e) => {
   if (e.target === els.confirmClearDialog) els.confirmClearDialog.close();
 });
+
 els.confirmClearBtn.addEventListener("click", async () => {
   els.confirmClearDialog.close();
-  const empty = emptyStore();
-  await chrome.storage.local.set(empty);
-  Object.assign(store, empty);
+  await clearAllData();
+  Object.assign(store, emptyStore());
+  dataIndexKey = null;
   state.animateNext = true;
   renderAll();
   toast("✓ Historial local borrado.");
 });
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   npService.removeTab(tabId);
   renderPlayer();
@@ -4042,6 +4166,9 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (npChanged) renderPlayer();
   if (dataChanged) {
     Object.assign(store, updates);
+    if (changedHistShards.length)
+      await npService.reloadHistoryShards(store, changedHistShards);
+    dataIndexKey = null;
     if (dataTimer) clearTimeout(dataTimer);
     dataTimer = setTimeout(refreshData, 1200);
   }
@@ -4057,8 +4184,10 @@ function cleanup() {
   if (searchTimer) clearTimeout(searchTimer);
   if (volTimer) clearTimeout(volTimer);
   if (libTimer) clearTimeout(libTimer);
+  if (dirTimer) clearTimeout(dirTimer);
   if (toastTimer) clearTimeout(toastTimer);
   if (toastGapTimer) clearTimeout(toastGapTimer);
+  ambientToken += 1;
   cancelCountUps();
   for (const io of observers) io.disconnect();
   observers.clear();
@@ -4132,7 +4261,9 @@ async function init() {
   const stale = npService.loadInitial(all);
   if (stale.length) chrome.storage.local.remove(stale);
   renderAll();
-  playerInterval = setInterval(renderPlayer, 3000);
+  playerInterval = setInterval(() => {
+    if (!document.hidden) renderPlayer();
+  }, 3000);
   if (urlParams.get("import") === "1")
     toast(
       "Modo completo abierto: tocá «Importar» para elegir tu archivo .zip o .json.",

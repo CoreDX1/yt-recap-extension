@@ -501,21 +501,6 @@ export function renderCalendarView({
     if (levelFilter != null && !otherMonth && level !== levelFilter) dim = true;
     if (dim) btn.classList.add("dimmed");
 
-    btn.addEventListener("click", (e) => {
-      if (e.shiftKey && uiState.selectedDateKey) {
-        uiState.calRangeAnchor = uiState.selectedDateKey;
-        uiState.calRangeEnd = key;
-      } else {
-        uiState.calRangeAnchor = null;
-        uiState.calRangeEnd = null;
-      }
-      uiState.selectedDateKey = key;
-      if (otherMonth) {
-        uiState.calYear = date.getFullYear();
-        uiState.calMonth = date.getMonth();
-      }
-      rerender();
-    });
     return btn;
   };
 

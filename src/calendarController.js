@@ -17,6 +17,29 @@ export function bindCalendarControls(dom, uiState, rerender) {
     setTimeout(() => b.classList.remove("pulse"), 700);
   };
 
+  // Delegación de clicks de celda (un solo listener para todo el mes).
+  dom.calGrid?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".cal-day");
+    if (!btn || !dom.calGrid.contains(btn)) return;
+    const key = btn.dataset.key;
+    if (!key) return;
+    const other = btn.dataset.other === "1";
+    const [y, m, d] = key.split("-").map(Number);
+    if (e.shiftKey && uiState.selectedDateKey) {
+      uiState.calRangeAnchor = uiState.selectedDateKey;
+      uiState.calRangeEnd = key;
+    } else {
+      uiState.calRangeAnchor = null;
+      uiState.calRangeEnd = null;
+    }
+    uiState.selectedDateKey = key;
+    if (other) {
+      uiState.calYear = y;
+      uiState.calMonth = m - 1;
+    }
+    rerender();
+  });
+
   document.querySelectorAll(".cal-pill[data-calday]").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".cal-pill[data-calday]").forEach((b) => {

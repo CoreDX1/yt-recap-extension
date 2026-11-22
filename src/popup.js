@@ -1,5 +1,4 @@
-// src/popup.js — v2.5.1 (ajuste opcional del PATCH C: debounce mayor + skip si oculto)
-
+// src/popup.js — v3 (índice compartido, invalidación por dependencia, sin código muerto)
 import {
   translateCategory,
   toDateKey,
@@ -10,8 +9,7 @@ import {
   formatShortDateTime,
   matchesFilter,
   matchesPeriodAndSourceOnly,
-  getGroupKey,
-  sanitizeFileSlug,
+  buildIndex,
   isMusicItem,
 } from "./utils.js";
 import {
@@ -25,10 +23,11 @@ import {
   loadStore,
   migrateMusicFlags,
   persistMusicFlags,
+  persistStore,
+  clearAllData,
   downloadBlob,
   exportPngCard,
   buildExportZip,
-  importFromFile,
   enrichImported,
   NowPlaying,
   emptyStore,
@@ -36,23 +35,13 @@ import {
 import { summaryVM, activityVM, channelsVM, likesVM } from "./viewModels.js";
 import { renderCalendarView } from "./calendarView.js";
 
-const urlParams = new URLSearchParams(location.search);
-const isFullMode = urlParams.get("full") === "1";
-if (isFullMode) {
-  location.replace(chrome.runtime.getURL("full.html"));
-  await new Promise(() => {});
-}
-
 document.getElementById("tab-calendar").innerHTML = CALENDAR_MARKUP;
-
 const $ = (id) => document.getElementById(id);
-
 const dom = {
   periodSelect: $("periodSelect"),
   sourceSelect: $("sourceSelect"),
   expandBtn: $("expandBtn"),
   importBtn: $("importBtn"),
-  importInput: $("importInput"),
   exportBtn: $("exportBtn"),
   statusBanner: $("statusBanner"),
   clearBtn: $("clearBtn"),
@@ -186,11 +175,21 @@ const uiState = {
   summaryCardData: null,
   monthCardData: null,
 };
-
 const store = emptyStore();
 const npService = new NowPlaying();
-
 let statusTimer = null;
+let dataIndex = null;
+let dataIndexKey = null;
+
+function getDataIndex() {
+  const k = `${store.history.length}|${store.interactions.length}|${store.searches.length}|${store.channelVisits.length}|${store.skips.length}`;
+  if (!dataIndex || dataIndexKey !== k) {
+    dataIndex = buildIndex(store);
+    dataIndexKey = k;
+  }
+  return dataIndex;
+}
+
 function showStatus(msg, isError = false) {
   dom.statusBanner.textContent = msg;
   dom.statusBanner.classList.toggle("error", isError);
@@ -222,9 +221,7 @@ function renderNowPlaying(np) {
   if (np.category) {
     dom.npCategoryBadge.textContent = translateCategory(np.category);
     dom.npCategoryBadge.hidden = false;
-  } else {
-    dom.npCategoryBadge.hidden = true;
-  }
+  } else dom.npCategoryBadge.hidden = true;
   const fmtLabels = { short: "Short", live: "En vivo", mix: "Mix" };
   const fmtText =
     fmtLabels[np.contentType] || (np.context === "mix" ? "Mix" : "");
@@ -444,10 +441,9 @@ function renderRecentTab() {
       .slice(0, 30);
     dom.recentList.replaceChildren(
       ...items.map((item) => {
-        const timeStr = new Date(item.timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
+        const timeStr =
+          formatShortDateTime(item.timestamp).split(" ")[1] ||
+          formatShortDateTime(item.timestamp);
         const tags = [];
         if (item.isLoop) tags.push("🔁 Bucle");
         if (item.category) tags.push(translateCategory(item.category));
@@ -498,7 +494,6 @@ function renderActivityTab() {
       matchesFilter(it, dom.periodSelect.value, dom.sourceSelect.value, true),
     ),
   );
-
   dom.categoriesBox.hidden = vm.catEntries.length === 0;
   dom.categoriesList.replaceChildren(
     ...vm.catEntries.map((st) => {
@@ -521,7 +516,6 @@ function renderActivityTab() {
       return row;
     }),
   );
-
   dom.hoursChart.replaceChildren(
     ...vm.hours.map((sec, h) => {
       const bar = document.createElement("div");
@@ -533,7 +527,6 @@ function renderActivityTab() {
       return bar;
     }),
   );
-
   dom.breakdownStats.replaceChildren(
     ...vm.chips.map(([label, val]) => {
       const div = document.createElement("div");
@@ -546,7 +539,6 @@ function renderActivityTab() {
       return div;
     }),
   );
-
   dom.searchesBox.hidden = vm.topSearches.length === 0;
   dom.topSearchesList.replaceChildren(
     ...vm.topSearches.map((s, idx) =>
@@ -560,7 +552,6 @@ function renderActivityTab() {
       ),
     ),
   );
-
   dom.albumsBox.hidden = vm.topAlbums.length === 0;
   dom.topAlbumsList.replaceChildren(
     ...vm.topAlbums.map((a, idx) =>
@@ -573,7 +564,6 @@ function renderActivityTab() {
       ),
     ),
   );
-
   dom.topArtistsList.replaceChildren(
     ...vm.topArtists.map((st, idx) =>
       buildTrackRow(
@@ -586,7 +576,6 @@ function renderActivityTab() {
       ),
     ),
   );
-
   dom.skipsBox.hidden = vm.topSkips.length === 0;
   dom.topSkipsList.replaceChildren(
     ...vm.topSkips.map((s, idx) =>
@@ -629,7 +618,6 @@ function renderChannelsTab() {
   dom.chUniqueCount.textContent = String(vm.unique);
   dom.chTotalVisits.textContent = String(vm.totalVisits);
   dom.chNewSubs.textContent = `🔔 ${newSubsCount}`;
-
   dom.channelsDurationEmpty.hidden = vm.withTime.length > 0;
   dom.channelsDurationList.replaceChildren(
     ...vm.withTime.map((ch, idx) =>
@@ -643,7 +631,6 @@ function renderChannelsTab() {
       ),
     ),
   );
-
   dom.channelsEmpty.hidden = vm.ranked.length > 0;
   dom.channelsTopList.replaceChildren(
     ...vm.ranked.map((ch, idx) =>
@@ -657,7 +644,6 @@ function renderChannelsTab() {
       ),
     ),
   );
-
   dom.channelsRecentEmpty.hidden = vm.recent.length > 0;
   dom.channelsRecentList.replaceChildren(
     ...vm.recent.map((v) =>
@@ -703,6 +689,13 @@ const TAB_RENDERERS = {
   channels: renderChannelsTab,
   likes: renderLikesTab,
 };
+const TAB_DEPS = {
+  history: ["summary", "recent", "activity", "calendar", "channels", "likes"],
+  interactions: ["recent", "activity", "calendar", "channels", "likes"],
+  searches: ["recent", "activity", "calendar", "likes"],
+  channelVisits: ["calendar", "channels"],
+  skips: ["activity"],
+};
 
 function renderActiveTab() {
   TAB_RENDERERS[uiState.activeTab]?.();
@@ -711,6 +704,14 @@ function renderActiveTab() {
 function invalidateAllTabs() {
   Object.keys(TAB_RENDERERS).forEach((t) => uiState.dirtyTabs.add(t));
   renderActiveTab();
+}
+function invalidateTabs(changedKeys) {
+  const affected = new Set();
+  for (const k of changedKeys)
+    (TAB_DEPS[k] || []).forEach((t) => affected.add(t));
+  if (!affected.size) return;
+  affected.forEach((t) => uiState.dirtyTabs.add(t));
+  if (affected.has(uiState.activeTab)) renderActiveTab();
 }
 
 dom.exportBtn.addEventListener("click", async () => {
@@ -733,28 +734,9 @@ dom.exportBtn.addEventListener("click", async () => {
     dom.exportBtn.textContent = orig;
   }
 });
-
 dom.importBtn.addEventListener("click", () => {
   window.open(chrome.runtime.getURL("full.html?import=1"), "_blank");
 });
-
-dom.importInput.addEventListener("change", async (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  try {
-    const { updatedData, message } = await importFromFile(file, store);
-    await chrome.storage.local.set(updatedData);
-    Object.assign(store, updatedData);
-    if (migrateMusicFlags(store)) await persistMusicFlags(store);
-    invalidateAllTabs();
-    showStatus(message);
-  } catch (err) {
-    showStatus(`Error al importar: ${err.message}`, true);
-  } finally {
-    dom.importInput.value = "";
-  }
-});
-
 dom.enrichMusicBtn.addEventListener("click", async () => {
   const orig = dom.enrichMusicBtn.textContent;
   dom.enrichMusicBtn.disabled = true;
@@ -784,7 +766,6 @@ dom.enrichMusicBtn.addEventListener("click", async () => {
     dom.enrichMusicBtn.textContent = orig;
   }
 });
-
 dom.expandBtn.addEventListener("click", () => {
   window.open(chrome.runtime.getURL("full.html"), "_blank");
 });
@@ -813,7 +794,6 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     if (uiState.dirtyTabs.has(uiState.activeTab)) renderActiveTab();
   });
 });
-
 document.querySelectorAll(".sub-pill[data-recent]").forEach((btn) => {
   btn.addEventListener("click", () => {
     document
@@ -824,9 +804,7 @@ document.querySelectorAll(".sub-pill[data-recent]").forEach((btn) => {
     renderRecentTab();
   });
 });
-
 bindCalendarControls(dom, uiState, renderCalendarTab);
-
 document.querySelectorAll(".ch-sort-pill[data-chsort]").forEach((btn) => {
   btn.addEventListener("click", () => {
     document
@@ -847,48 +825,57 @@ document.querySelectorAll(".ch-dur-pill[data-chmin]").forEach((btn) => {
     renderChannelsTab();
   });
 });
-
 dom.periodSelect.addEventListener("change", invalidateAllTabs);
 dom.sourceSelect.addEventListener("change", invalidateAllTabs);
-
-dom.clearBtn.addEventListener("click", () => {
-  dom.confirmClearDialog.showModal();
-});
-dom.cancelClearBtn.addEventListener("click", () => {
-  dom.confirmClearDialog.close();
-});
+dom.clearBtn.addEventListener("click", () =>
+  dom.confirmClearDialog.showModal(),
+);
+dom.cancelClearBtn.addEventListener("click", () =>
+  dom.confirmClearDialog.close(),
+);
 dom.confirmClearDialog.addEventListener("click", (e) => {
   if (e.target === dom.confirmClearDialog) dom.confirmClearDialog.close();
 });
 dom.confirmClearBtn.addEventListener("click", async () => {
   dom.confirmClearDialog.close();
-  const empty = emptyStore();
-  await chrome.storage.local.set(empty);
-  Object.assign(store, empty);
+  await clearAllData();
+  Object.assign(store, emptyStore());
   invalidateAllTabs();
   showStatus("✓ Historial local borrado.");
 });
-
 chrome.tabs.onRemoved.addListener((tabId) => {
   npService.removeTab(tabId);
   renderBestNowPlaying();
 });
 
-// PATCH C (opcional): debounce 600ms y skip de re-render si el popup está oculto.
 let dataRenderTimer = null;
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
-  const { npChanged, needSync, dataChanged, updates } =
+  const { npChanged, needSync, dataChanged, updates, changedHistShards } =
     npService.applyChanges(changes);
   if (needSync) await npService.sync();
   if (npChanged) renderBestNowPlaying();
   if (dataChanged) {
     Object.assign(store, updates);
+    if (changedHistShards.length)
+      await npService.reloadHistoryShards(store, changedHistShards);
+    dataIndexKey = null;
     if (dataRenderTimer) clearTimeout(dataRenderTimer);
     dataRenderTimer = setTimeout(() => {
-      if (!document.hidden) invalidateAllTabs();
+      if (!document.hidden) {
+        const changedKeys = Object.keys(updates);
+        if (changedHistShards.length) changedKeys.push("history");
+        invalidateTabs(changedKeys);
+      }
     }, 600);
   }
+});
+
+let npInterval = null;
+window.addEventListener("pagehide", () => {
+  if (npInterval) clearInterval(npInterval);
+  if (dataRenderTimer) clearTimeout(dataRenderTimer);
+  if (statusTimer) clearTimeout(statusTimer);
 });
 
 async function init() {
@@ -901,17 +888,17 @@ async function init() {
     const changed = migrateMusicFlags(store);
     const payload = { musicFlagMigratedV1: true };
     if (changed) {
-      payload.history = store.history;
       payload.skips = store.skips;
       payload.interactions = store.interactions;
     }
     await chrome.storage.local.set(payload);
+    if (changed) await persistMusicFlags(store);
   }
   const staleKeys = npService.loadInitial(all);
   if (staleKeys.length > 0) chrome.storage.local.remove(staleKeys);
+  getDataIndex();
   renderBestNowPlaying();
   invalidateAllTabs();
-  setInterval(renderBestNowPlaying, 3000);
+  npInterval = setInterval(renderBestNowPlaying, 3000);
 }
-
 init();

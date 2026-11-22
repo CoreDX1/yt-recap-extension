@@ -1,5 +1,4 @@
 // src/utils.js
-
 export const CATEGORY_LABELS = {
   Music: "Música",
   Gaming: "Videojuegos",
@@ -15,22 +14,25 @@ export const CATEGORY_LABELS = {
   "Autos & Vehicles": "Autos",
   "Pets & Animals": "Mascotas",
   "Travel & Events": "Viajes",
+  Trailers: "Tráilers",
+  Shows: "Programas",
+  Movies: "Películas",
+  "Anime & Animation": "Anime y Animación",
+  "Nonprofits & Activism": "ONG y Activismo",
 };
 
 export function translateCategory(cat) {
   return cat ? CATEGORY_LABELS[cat] || cat : "";
 }
 
-// --- FASE 2: clasificación de contenido musical ---
-// Canales auto-generados de artistas ("Artist - Topic" / "- Tema").
 export function isTopicChannelName(name) {
   return /[-–—]\s*(topic|tema)\s*$/i.test(String(name || "").trim());
 }
 
-// Regla amplia (la misma que content.js): categoría Music (incluye
-// AMVs/lyrics/covers) || musicVideoType presente || canal - Topic.
-// Nota: content.js mantiene su propia copia porque es un content script
-// clásico (no módulo). Si cambiás la regla, actualizá ambos lados.
+// Regla amplia (la misma que content.js): categoría Music || musicVideoType
+// presente || canal - Topic. content.js mantiene una copia porque es un content
+// script clásico (no módulo). PARIDAD: si cambiás esta regla, actualizá
+// detectIsMusicContent() en content.js (mismo orden de condiciones).
 export function computeIsMusicFlag(category, musicVideoType, artist) {
   return (
     category === "Music" ||
@@ -39,7 +41,6 @@ export function computeIsMusicFlag(category, musicVideoType, artist) {
   );
 }
 
-// Punto de verdad único: música = plataforma YT Music o flag de contenido.
 export function isMusicItem(item) {
   return (
     item?.source === "yt_music" ||
@@ -119,42 +120,33 @@ export function formatDuration(totalSeconds) {
   return `${hrs}h ${rem}m`;
 }
 
+// Fuente única de formato fecha+hora: es-AR, 24 h (igual que relativeTime.js).
+const SHORT_DT_FMT = new Intl.DateTimeFormat("es-AR", {
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 export function formatShortDateTime(ts) {
-  const d = new Date(ts);
-  const dateStr = d.toLocaleDateString([], {
-    day: "2-digit",
-    month: "2-digit",
-  });
-  const timeStr = d.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  return `${dateStr} ${timeStr}`;
+  return SHORT_DT_FMT.format(new Date(ts));
 }
 
 export function computeStreak(items) {
   if (items.length === 0) return 0;
-  const daysSet = new Set(
-    items.map((item) => toDateKey(new Date(item.timestamp))),
-  );
-  let streak = 0;
+  const days = new Set(items.map((it) => toDateKey(new Date(it.timestamp))));
   const cursor = new Date();
-
-  while (true) {
-    const key = toDateKey(cursor);
-    if (daysSet.has(key)) {
-      streak += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    } else if (streak === 0) {
-      cursor.setDate(cursor.getDate() - 1);
-      if (!daysSet.has(toDateKey(cursor))) break;
-    } else {
-      break;
-    }
+  // Si hoy no tiene actividad, la racha puede seguir viva desde ayer.
+  if (!days.has(toDateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+  let streak = 0;
+  while (days.has(toDateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
   }
   return streak;
 }
 
+// Filtro de formato puro: "no_shorts"/"short"/"live" no aplican scope musical.
 export function matchesFilter(
   item,
   periodValue,
@@ -167,8 +159,6 @@ export function matchesFilter(
   }
   const cType =
     item.contentType || (item.source === "yt_music" ? "music" : "video");
-  // FASE 2: "YT Music" = contenido musical (cualquier plataforma);
-  // "YouTube" = plataforma YouTube sin contenido musical.
   if (sourceValue === "yt_music") return isMusicItem(item);
   if (sourceValue === "youtube")
     return item.source === "youtube" && !isMusicItem(item);
@@ -194,7 +184,7 @@ export function matchesPeriodAndSourceOnly(
   return true;
 }
 
-export function aggregateTracks(items) {
+export function aggregateTracks(items, sortBy = "plays") {
   const map = new Map();
   for (const item of items) {
     const key = getGroupKey(item);
@@ -222,16 +212,22 @@ export function aggregateTracks(items) {
     if (!current.videoUrl) current.videoUrl = resolveVideoUrl(item);
     map.set(key, current);
   }
-  return [...map.values()].sort(
-    (a, b) => b.plays - a.plays || b.seconds - a.seconds,
-  );
+  const list = [...map.values()];
+  // Rankings de tiempo ordenan por segundos (los importados con seconds:0
+  // ya no desplazan a las reproducciones reales).
+  if (sortBy === "seconds") {
+    list.sort((a, b) => b.seconds - a.seconds || b.plays - a.plays);
+  } else {
+    list.sort((a, b) => b.plays - a.plays || b.seconds - a.seconds);
+  }
+  return list;
 }
 
 export function sanitizeFileSlug(text) {
   return (
     String(text || "imagen")
       .normalize("NFD")
-      .replace(/[̀-ͯ]/g, "")
+      .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
@@ -243,4 +239,59 @@ export function getExtFromMime(mime = "") {
   if (mime.includes("png")) return "png";
   if (mime.includes("webp")) return "webp";
   return "jpg";
+}
+
+// ---------- Índice en memoria (F2) ----------
+// Se construye una sola vez por cambio de datos. Las vistas piden buckets
+// en vez de re-filtrar el array completo en cada render.
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+export function buildIndex(store) {
+  const byDay = new Map();
+  const byMonth = new Map();
+  const bucket = (map, k) => {
+    let b = map.get(k);
+    if (!b) {
+      b = { plays: [], inter: [], searches: [], visits: [], skips: [], sec: 0 };
+      map.set(k, b);
+    }
+    return b;
+  };
+  const put = (item, kind) => {
+    const d = new Date(item.timestamp);
+    const dk = toDateKey(d);
+    const mk = `${d.getFullYear()}-${d.getMonth()}`;
+    bucket(byDay, dk)[kind].push(item);
+    bucket(byMonth, mk)[kind].push(item);
+    if (kind === "plays") {
+      const s = item.seconds || 0;
+      byDay.get(dk).sec += s;
+      byMonth.get(mk).sec += s;
+    }
+  };
+  for (const p of store.history) put(p, "plays");
+  for (const it of store.interactions) put(it, "inter");
+  for (const s of store.searches) put(s, "searches");
+  for (const v of store.channelVisits) put(v, "visits");
+  for (const sk of store.skips) put(sk, "skips");
+
+  // Firma incremental sobre TODOS los datos (cualquier cambio la altera).
+  let sig = 0;
+  const mix = (s) => {
+    sig = (sig * 31 + hashStr(s)) | 0;
+  };
+  for (const p of store.history)
+    mix(
+      `${p.id}|${p.seconds}|${p.title}|${p.artist}|${p.category}|${p.isMusic ? 1 : 0}|${p.contentType}`,
+    );
+  for (const it of store.interactions) mix(`${it.id}|${it.type}`);
+  for (const s of store.searches) mix(s.id);
+  for (const v of store.channelVisits) mix(v.id);
+  for (const sk of store.skips) mix(sk.id);
+
+  return { byDay, byMonth, sig };
 }

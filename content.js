@@ -1,9 +1,7 @@
 // content.js
-
+// content.js
 (() => {
-  if (typeof window.__ytRecapCleanup === "function") {
-    window.__ytRecapCleanup();
-  }
+  if (typeof window.__ytRecapCleanup === "function") window.__ytRecapCleanup();
 
   const CONFIG = {
     MIN_SECONDS_TO_COUNT: 20,
@@ -12,8 +10,11 @@
     TICK_MS: 1000,
     MAX_SKIPS: 1000,
     MAX_SEARCHES: 2000,
+    MAX_INTERACTIONS: 5000,
+    MAX_VISITS: 3000,
+    MAX_PER_SHARD: 4000,
+    SHARD_REFRESH_MS: 10000,
     MUSIC_STRICT: false,
-    REMOTE_DISLIKE: false,
   };
 
   const isMusic = location.hostname === "music.youtube.com";
@@ -50,10 +51,16 @@
   };
 
   let saveQueue = Promise.resolve();
+  let queueDepth = 0;
   const categoryCache = new Map();
   const musicTypeCache = new Map();
   const fetchingCategories = new Set();
   const boundVideos = new WeakSet();
+
+  // Cache caliente de shards de historial (F1).
+  const histShards = new Map(); // key -> { arr, pos: Map<id,idx>, loadedAt }
+  let histIndex = null;
+  const listCache = new Map(); // key -> { arr, loadedAt }
 
   window.__ytRecapCleanup = () => {
     if (state.timerId) clearInterval(state.timerId);
@@ -67,7 +74,6 @@
       chrome.storage?.local,
     );
   }
-
   function stopIfInvalid() {
     if (isContextValid()) return false;
     window.__ytRecapCleanup();
@@ -77,9 +83,8 @@
   function ensureTabId() {
     if (realTabId != null) return Promise.resolve(realTabId);
     if (tabIdPromise) return tabIdPromise;
-    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage)
       return Promise.resolve(null);
-    }
     tabIdPromise = chrome.runtime
       .sendMessage({ type: "GET_TAB_ID" })
       .then((res) => {
@@ -99,23 +104,77 @@
       });
     return tabIdPromise;
   }
-
   ensureTabId();
 
   function enqueueStorage(fn) {
     if (stopIfInvalid()) return saveQueue;
-    saveQueue = saveQueue.then(fn).catch((err) => {
-      if (
-        String(err?.message || err)
-          .toLowerCase()
-          .includes("context invalidated")
-      ) {
-        window.__ytRecapCleanup();
-        return;
-      }
-      console.error("[YT Recap] Error de almacenamiento:", err);
-    });
+    queueDepth += 1;
+    saveQueue = saveQueue
+      .then(fn)
+      .catch((err) => {
+        if (
+          String(err?.message || err)
+            .toLowerCase()
+            .includes("context invalidated")
+        ) {
+          window.__ytRecapCleanup();
+          return;
+        }
+        console.error("[YT Recap] Error de almacenamiento:", err);
+      })
+      .finally(() => {
+        queueDepth -= 1;
+      });
     return saveQueue;
+  }
+
+  // PARIDAD con recapStore.shardKeyForTs (content script clásico, sin módulos).
+  function shardKeyForTs(ts) {
+    const d = new Date(ts);
+    return `hist_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  async function getShard(key) {
+    let s = histShards.get(key);
+    const now = Date.now();
+    if (!s || now - s.loadedAt > CONFIG.SHARD_REFRESH_MS) {
+      const data = await chrome.storage.local.get(key);
+      const arr = Array.isArray(data[key]) ? data[key] : [];
+      const pos = new Map();
+      arr.forEach((it, i) => pos.set(it.id, i));
+      s = { arr, pos, loadedAt: now };
+      histShards.set(key, s);
+    }
+    return s;
+  }
+
+  async function getIndex() {
+    if (histIndex) return histIndex;
+    const data = await chrome.storage.local.get("hist_index");
+    histIndex =
+      data.hist_index && typeof data.hist_index === "object"
+        ? data.hist_index
+        : {};
+    return histIndex;
+  }
+
+  async function getList(key) {
+    let c = listCache.get(key);
+    const now = Date.now();
+    if (!c || now - c.loadedAt > CONFIG.SHARD_REFRESH_MS) {
+      const data = await chrome.storage.local.get({ [key]: [] });
+      c = { arr: Array.isArray(data[key]) ? data[key] : [], loadedAt: now };
+      listCache.set(key, c);
+    }
+    return c;
+  }
+
+  async function cappedAppend(key, entry, max, dedupeFn) {
+    const c = await getList(key);
+    if (dedupeFn && c.arr.some(dedupeFn)) return;
+    c.arr.push(entry);
+    if (c.arr.length > max) c.arr.splice(0, c.arr.length - max);
+    await chrome.storage.local.set({ [key]: c.arr });
   }
 
   // --- EXTRACCIÓN DE METADATOS ---
@@ -168,6 +227,7 @@
     return /[-–—]\s*(topic|tema)\s*$/i.test(String(name || "").trim());
   }
 
+  // PARIDAD con utils.computeIsMusicFlag (mismo orden de condiciones).
   function detectIsMusicContent(category, musicVideoType, artist) {
     if (isMusic) return true;
     const topic = isTopicChannel(artist);
@@ -181,7 +241,6 @@
     if (isMusic) return "Music";
     if (!videoId) return "";
     if (categoryCache.has(videoId)) return categoryCache.get(videoId);
-
     const micro = document.querySelector(
       "#microformat, ytd-player-microformat-renderer",
     );
@@ -208,7 +267,6 @@
         return microGenre;
       }
     }
-
     if (!fetchingCategories.has(videoId)) {
       fetchingCategories.add(videoId);
       fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`, {
@@ -217,10 +275,12 @@
         .then((r) => (r.ok ? r.text() : ""))
         .then((html) => {
           if (!html) return;
-          const catMatch = html.match(/"category"\s*:\s*"([^"]+)"/);
-          const typeMatch = html.match(/"musicVideoType"\s*:\s*"([^"]+)"/);
-          const cat = catMatch?.[1]?.replace(/\\u0026/g, "&") || "";
-          const musicType = typeMatch?.[1] || "";
+          const cat =
+            html
+              .match(/"category"\s*:\s*"([^"]+)"/)?.[1]
+              ?.replace(/\\u0026/g, "&") || "";
+          const musicType =
+            html.match(/"musicVideoType"\s*:\s*"([^"]+)"/)?.[1] || "";
           if (cat) categoryCache.set(videoId, cat);
           if (musicType) musicTypeCache.set(videoId, musicType);
           const s = state.session;
@@ -277,17 +337,14 @@
     const contentType = detectContentType();
     const { context, playlistId } = detectPlaybackContext();
     const category = resolveVideoCategory(videoId);
-
     const meta = navigator.mediaSession?.metadata;
     const metaTitle = meta?.title?.trim() || "";
     const metaArtist = meta?.artist?.trim() || "";
     const album = meta?.album?.trim() || "";
     let artwork = meta?.artwork?.[meta.artwork.length - 1]?.src || "";
-
-    let domTitle = "";
-    let domArtist = "";
-    let channelUrl = "";
-
+    let domTitle = "",
+      domArtist = "",
+      channelUrl = "";
     if (isMusic) {
       domTitle =
         document
@@ -313,13 +370,11 @@
       domArtist = channelEl?.textContent?.trim() || "";
       channelUrl = channelEl?.href || "";
     }
-
     let docTitle = document.title
       .replace(/^\(\d+\)\s*/, "")
       .replace(/\s*-\s*YouTube(\s+Music)?$/i, "")
       .trim();
     if (/^YouTube(\s+Music)?$/i.test(docTitle)) docTitle = "";
-
     const title = isMusic
       ? metaTitle || domTitle || docTitle
       : domTitle ||
@@ -327,25 +382,20 @@
         docTitle ||
         (videoId ? `Video (${videoId})` : "");
     if (!title) return null;
-
     const artist =
       (isMusic ? metaArtist || domArtist : domArtist || metaArtist) ||
       "YouTube";
-    if (!artwork && videoId) {
+    if (!artwork && videoId)
       artwork = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-    }
-
     const musicVideoType = musicTypeCache.get(videoId) || "";
     const isMusicContent = detectIsMusicContent(
       category,
       musicVideoType,
       artist,
     );
-
     const trackKey = isMusic
       ? `ytm::${title.toLowerCase()}::${artist.toLowerCase()}`
       : `yt::${videoId}::${title.toLowerCase()}`;
-
     return {
       trackKey,
       videoId,
@@ -367,19 +417,15 @@
   // --- ESTADO DE LIKE / CONTROL REMOTO ---
   const LIKE_SELECTOR =
     "like-button-view-model button, ytd-toggle-button-renderer#like-button button, #like-button button, ytmusic-like-button-renderer #button-shape-like button, ytmusic-like-button-renderer tp-yt-paper-icon-button.like";
-  const DISLIKE_SELECTOR =
-    "dislike-button-view-model button, ytd-toggle-button-renderer#dislike-button button, #dislike-button button, ytmusic-like-button-renderer #button-shape-dislike button, ytmusic-like-button-renderer tp-yt-paper-icon-button.dislike";
 
   function findLikeButton() {
     return document.querySelector(LIKE_SELECTOR);
   }
-
   function readLikedState() {
     const btn = findLikeButton();
     if (!btn) return null;
     return isLikeActive(btn);
   }
-
   function clickFirst(selectors) {
     for (const sel of selectors) {
       const el = document.querySelector(sel);
@@ -418,9 +464,7 @@
             0,
             Math.min(msg.value, video.duration || msg.value),
           );
-          if (state.session) {
-            state.session.maxTimeReached = video.currentTime;
-          }
+          if (state.session) state.session.maxTimeReached = video.currentTime;
           state.suppressRestartUntil = Date.now() + 2000;
           ok = true;
         }
@@ -454,15 +498,6 @@
             const i = getTrackInfo();
             if (v && i) publishNowPlaying(v, i);
           }, 600);
-        }
-        break;
-      }
-      case "dislike": {
-        if (!CONFIG.REMOTE_DISLIKE) break;
-        const btn = document.querySelector(DISLIKE_SELECTOR);
-        if (btn) {
-          btn.click();
-          ok = true;
         }
         break;
       }
@@ -505,7 +540,6 @@
     const key = `${source}::${query.toLowerCase()}`;
     if (state.activeSearchKey === key) return;
     state.activeSearchKey = key;
-
     const entry = {
       id: `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       query,
@@ -514,22 +548,17 @@
       source,
       timestamp: Date.now(),
     };
-
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
-      const data = await chrome.storage.local.get({ searches: [] });
-      const searches = Array.isArray(data.searches) ? data.searches : [];
-      const lastSame = [...searches]
-        .reverse()
-        .find(
-          (s) => s.normalized === entry.normalized && s.source === entry.source,
-        );
-      if (lastSame && entry.timestamp - lastSame.timestamp < 300000) return;
-      searches.push(entry);
-      if (searches.length > CONFIG.MAX_SEARCHES) {
-        searches.splice(0, searches.length - CONFIG.MAX_SEARCHES);
-      }
-      await chrome.storage.local.set({ searches });
+      await cappedAppend(
+        "searches",
+        entry,
+        CONFIG.MAX_SEARCHES,
+        (s) =>
+          s.normalized === entry.normalized &&
+          s.source === entry.source &&
+          entry.timestamp - s.timestamp < 300000,
+      );
     });
   }
 
@@ -543,7 +572,6 @@
         ?.getAttribute("like-status") === "LIKE"
     );
   }
-
   function isSubscribeActive(btn) {
     if (!btn) return false;
     const container = btn.closest(
@@ -559,24 +587,19 @@
       aria.includes("unsubscribe")
     );
   }
-
   function saveInteraction(entry) {
     if (stopIfInvalid() || !entry) return;
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
-      const data = await chrome.storage.local.get({ interactions: [] });
-      const interactions = Array.isArray(data.interactions)
-        ? data.interactions
-        : [];
-      const recentDup = interactions.find(
+      await cappedAppend(
+        "interactions",
+        entry,
+        CONFIG.MAX_INTERACTIONS,
         (it) =>
           it.type === entry.type &&
           it.targetKey === entry.targetKey &&
           entry.timestamp - it.timestamp < 120000,
       );
-      if (recentDup) return;
-      interactions.push(entry);
-      await chrome.storage.local.set({ interactions });
     });
   }
 
@@ -586,7 +609,6 @@
       if (stopIfInvalid()) return;
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
-
       const likeBtn = target.closest(LIKE_SELECTOR);
       if (likeBtn) {
         const wasLiked = isLikeActive(likeBtn);
@@ -610,7 +632,6 @@
           });
         }, 450);
       }
-
       const subBtn = target.closest(
         "ytd-subscribe-button-renderer button, yt-subscribe-button-view-model button, #subscribe-button button, ytmusic-subscribe-button-renderer button",
       );
@@ -650,22 +671,19 @@
     if (isMusic && !match[1].toLowerCase().startsWith("channel/")) return null;
     return `/${match[1]}`;
   }
-
   function findVisible(root, selectors, attr) {
     for (const sel of selectors) {
       const visible = [...root.querySelectorAll(sel)].find(
         (el) =>
           !el.closest("[hidden]") && (attr ? el[attr] : el.textContent?.trim()),
       );
-      if (visible) {
+      if (visible)
         return attr
           ? visible[attr]
           : visible.textContent.replace(/\s+/g, " ").trim();
-      }
     }
     return "";
   }
-
   function getChannelPageInfo(basePath) {
     const scope = isMusic
       ? document.querySelector("ytmusic-browse-response") || document
@@ -706,24 +724,16 @@
       url: `${location.origin}${basePath}`,
     };
   }
-
   function saveChannelVisit(visit, isUpdate = false) {
     if (stopIfInvalid()) return;
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
-      const data = await chrome.storage.local.get({ channelVisits: [] });
-      const visits = Array.isArray(data.channelVisits)
-        ? data.channelVisits
-        : [];
-      const idx = visits.findIndex((v) => v.id === visit.id);
+      const c = await getList("channelVisits");
+      const idx = c.arr.findIndex((v) => v.id === visit.id);
       if (idx >= 0) {
-        visits[idx] = {
-          ...visits[idx],
-          name: visit.name,
-          avatar: visit.avatar,
-        };
+        c.arr[idx] = { ...c.arr[idx], name: visit.name, avatar: visit.avatar };
       } else if (!isUpdate) {
-        visits.push({
+        c.arr.push({
           id: visit.id,
           channelKey: visit.basePath.toLowerCase(),
           name: visit.name,
@@ -732,11 +742,12 @@
           source,
           timestamp: visit.timestamp,
         });
+        if (c.arr.length > CONFIG.MAX_VISITS)
+          c.arr.splice(0, c.arr.length - CONFIG.MAX_VISITS);
       }
-      await chrome.storage.local.set({ channelVisits: visits });
+      await chrome.storage.local.set({ channelVisits: c.arr });
     });
   }
-
   function handleChannelTracking() {
     const basePath = getChannelBasePath();
     if (!basePath) {
@@ -787,11 +798,9 @@
       ? Math.round(video.duration)
       : 0;
     let minRequired = CONFIG.MIN_SECONDS_TO_COUNT;
-    if (isLoop) {
-      minRequired = CONFIG.MIN_SECONDS_ON_LOOP;
-    } else if (dur > 0 && dur < CONFIG.MIN_SECONDS_TO_COUNT) {
+    if (isLoop) minRequired = CONFIG.MIN_SECONDS_ON_LOOP;
+    else if (dur > 0 && dur < CONFIG.MIN_SECONDS_TO_COUNT)
       minRequired = Math.max(5, Math.floor(dur * 0.8));
-    }
     return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       ...info,
@@ -804,6 +813,7 @@
       isLoop,
       maxTimeReached: video.currentTime || 0,
       lastSavedSeconds: -10,
+      lastWrittenHash: "",
       startedAt: Date.now(),
     };
   }
@@ -829,13 +839,7 @@
     };
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
-      const data = await chrome.storage.local.get({ skips: [] });
-      const skips = Array.isArray(data.skips) ? data.skips : [];
-      skips.push(skipEntry);
-      if (skips.length > CONFIG.MAX_SKIPS) {
-        skips.splice(0, skips.length - CONFIG.MAX_SKIPS);
-      }
-      await chrome.storage.local.set({ skips });
+      await cappedAppend("skips", skipEntry, CONFIG.MAX_SKIPS, null);
     });
   }
 
@@ -880,15 +884,40 @@
       isLoop: session.isLoop,
       timestamp: session.startedAt,
     };
+    // Dedupe: no reescribir un snapshot idéntico (visibilitychange/pagehide).
+    const hash = `${snapshot.seconds}|${snapshot.category}|${snapshot.isMusic}|${snapshot.completionPct}|${snapshot.playbackRate}`;
+    if (hash === session.lastWrittenHash) return;
+    session.lastWrittenHash = hash;
     session.lastSavedSeconds = session.seconds;
     enqueueStorage(async () => {
       if (stopIfInvalid()) return;
-      const data = await chrome.storage.local.get({ history: [] });
-      const history = Array.isArray(data.history) ? data.history : [];
-      const idx = history.findIndex((item) => item.id === snapshot.id);
-      if (idx >= 0) history[idx] = snapshot;
-      else history.push(snapshot);
-      await chrome.storage.local.set({ history });
+      const key = shardKeyForTs(snapshot.timestamp);
+      const shard = await getShard(key);
+      const idx = shard.pos.get(snapshot.id);
+      let countChanged = false;
+      if (idx != null) {
+        shard.arr[idx] = snapshot;
+      } else {
+        shard.pos.set(snapshot.id, shard.arr.length);
+        shard.arr.push(snapshot);
+        countChanged = true;
+        if (shard.arr.length > CONFIG.MAX_PER_SHARD) {
+          const removed = shard.arr.splice(
+            0,
+            shard.arr.length - CONFIG.MAX_PER_SHARD,
+          );
+          shard.pos = new Map();
+          shard.arr.forEach((it, i) => shard.pos.set(it.id, i));
+          for (const r of removed) shard.pos.delete(r.id);
+        }
+      }
+      const payload = { [key]: shard.arr };
+      if (countChanged) {
+        const index = await getIndex();
+        index[key] = shard.arr.length;
+        payload.hist_index = index;
+      }
+      await chrome.storage.local.set(payload);
     });
   }
 
@@ -949,9 +978,8 @@
         String(err?.message || err)
           .toLowerCase()
           .includes("context invalidated")
-      ) {
+      )
         window.__ytRecapCleanup();
-      }
     }
   }
 
@@ -1021,9 +1049,8 @@
   document.addEventListener(
     "visibilitychange",
     () => {
-      if (document.visibilityState === "hidden" && state.session) {
+      if (document.visibilityState === "hidden" && state.session)
         upsertSession(state.session, true);
-      }
       const video = getActiveVideo();
       const info = getTrackInfo();
       if (video && info) {
@@ -1045,7 +1072,7 @@
         try {
           await chrome.storage.local.remove(state.activeNpKey);
         } catch {
-          // Ignorar
+          /* Ignorar */
         }
       }
     },

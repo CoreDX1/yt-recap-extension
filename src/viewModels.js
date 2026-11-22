@@ -37,7 +37,7 @@ export function summaryVM(filtered) {
     cur.seconds += item.seconds || 0;
     artistsMap.set(ak, cur);
   }
-  const topTracks = aggregateTracks(filtered);
+  const topTracks = aggregateTracks(filtered, "seconds");
   const topArtist =
     [...artistsMap.entries()].sort(
       (a, b) => b[1].seconds - a[1].seconds || b[1].plays - a[1].plays,
@@ -333,6 +333,7 @@ export function homeVM(periodPlays, allPlays, inter, searches, visits) {
     if (it.targetKey) likedKeys.add(it.targetKey);
   }
   const forgotMap = new Map();
+  const monthAgg = new Map();
   for (const p of allPlays) {
     const key = getGroupKey(p);
     const cur = forgotMap.get(key) || {
@@ -350,13 +351,18 @@ export function homeVM(periodPlays, allPlays, inter, searches, visits) {
     if (likedKeys.has(p.videoId) || likedKeys.has(key)) cur.liked = true;
     if (!cur.artwork && p.artwork) cur.artwork = p.artwork;
     forgotMap.set(key, cur);
+    const pd = new Date(p.timestamp);
+    const mk = `${pd.getFullYear()}-${pd.getMonth()}`;
+    const ma = monthAgg.get(mk) || { plays: 0, seconds: 0 };
+    ma.plays += 1;
+    ma.seconds += p.seconds || 0;
+    monthAgg.set(mk, ma);
   }
   const cutoff = Date.now() - 30 * 86400000;
   const forgotten = [...forgotMap.values()]
     .filter((t) => (t.plays >= 2 || t.liked) && t.lastTs < cutoff)
     .sort((a, b) => b.plays - a.plays || b.lastTs - a.lastTs)
     .slice(0, 12);
-
   const artistsMap = new Map();
   const albumsMap = new Map();
   for (const p of periodPlays) {
@@ -394,32 +400,23 @@ export function homeVM(periodPlays, allPlays, inter, searches, visits) {
   const albums = [...albumsMap.values()]
     .sort((a, b) => b.plays - a.plays || b.seconds - a.seconds)
     .slice(0, 12);
-
   const months = [];
   const now = new Date();
+  const monthFmt = new Intl.DateTimeFormat("es-AR", { month: "long" });
   for (let i = 0; i < 12; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const y = d.getFullYear();
     const m = d.getMonth();
-    let plays = 0;
-    let seconds = 0;
-    for (const p of allPlays) {
-      const pd = new Date(p.timestamp);
-      if (pd.getFullYear() === y && pd.getMonth() === m) {
-        plays += 1;
-        seconds += p.seconds || 0;
-      }
-    }
+    const ma = monthAgg.get(`${y}-${m}`) || { plays: 0, seconds: 0 };
     months.push({
       y,
       m,
-      label: new Intl.DateTimeFormat("es-AR", { month: "long" }).format(d),
+      label: monthFmt.format(d),
       year: y,
-      plays,
-      seconds,
+      plays: ma.plays,
+      seconds: ma.seconds,
     });
   }
-
   const recent = [...periodPlays]
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 12);
@@ -434,7 +431,6 @@ export function homeVM(periodPlays, allPlays, inter, searches, visits) {
   const recentSearches = [...searches]
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 12);
-
   const chMap = new Map();
   for (const p of periodPlays) {
     const ak = p.artist || "YouTube";
@@ -467,7 +463,6 @@ export function homeVM(periodPlays, allPlays, inter, searches, visits) {
   const channels = [...chMap.values()]
     .sort((a, b) => b.seconds - a.seconds || b.plays - a.plays)
     .slice(0, 12);
-
   return {
     top,
     forgotten,
@@ -708,13 +703,14 @@ export function artistDetailVM(name, plays, inter) {
   const mine = plays.filter(
     (p) => (p.artist || "Desconocido").toLowerCase() === key,
   );
-  const topTracks = aggregateTracks(mine).slice(0, 20);
+  const topTracks = aggregateTracks(mine, "seconds").slice(0, 20);
   const albumsMap = new Map();
   const monthsMap = new Map();
   let seconds = 0,
     lastTs = 0,
     artwork = "",
     url = "";
+  const monthFmt = new Intl.DateTimeFormat("es-AR", { month: "long" });
   for (const p of mine) {
     seconds += p.seconds || 0;
     lastTs = Math.max(lastTs, p.timestamp);
@@ -738,7 +734,7 @@ export function artistDetailVM(name, plays, inter) {
     const mo = monthsMap.get(mk) || {
       y: d.getFullYear(),
       m: d.getMonth(),
-      label: new Intl.DateTimeFormat("es-AR", { month: "long" }).format(d),
+      label: monthFmt.format(d),
       year: d.getFullYear(),
       plays: 0,
       seconds: 0,
@@ -864,6 +860,7 @@ export function channelDetailVM(name, plays, visits) {
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, 12);
   };
+  const topTracks = aggregateTracks(mine, "seconds").slice(0, 20);
   return {
     name: mine[0]?.artist || myVisits[0]?.name || name,
     avatar,
@@ -871,14 +868,12 @@ export function channelDetailVM(name, plays, visits) {
     plays: mine.length,
     seconds,
     visits: myVisits.length,
-    topTracks: aggregateTracks(mine).slice(0, 20),
+    topTracks,
     shorts: dedupe(mine.filter((p) => p.contentType === "short")),
     lives: dedupe(mine.filter((p) => p.contentType === "live")),
     recent: dedupe(mine),
     recentVisits: myVisits.slice(0, 12),
-    ids: aggregateTracks(mine)
-      .map((t) => t.videoId)
-      .filter(Boolean),
+    ids: topTracks.map((t) => t.videoId).filter(Boolean),
   };
 }
 
@@ -992,7 +987,6 @@ export function prevHoursVM(prevPlays) {
 
 export function yearHeatVM(plays, year) {
   const jan1 = new Date(year, 0, 1);
-  const dec31 = new Date(year, 11, 31);
   const startPad = (jan1.getDay() + 6) % 7;
   const byDay = new Map();
   for (const p of plays) {

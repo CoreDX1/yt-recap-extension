@@ -16,6 +16,10 @@ export const STORE_KEYS = [
   "interactions",
   "searches",
 ];
+export const HIST_PREFIX = "hist_";
+export const HIST_INDEX = "hist_index";
+const HIST_MIGRATED = "histMigratedV1";
+const MAX_HISTORY = 20000;
 
 export function emptyStore() {
   return {
@@ -27,12 +31,97 @@ export function emptyStore() {
   };
 }
 
+// Clave de shard por mes local. PARIDAD: content.js replica esta fórmula.
+export function shardKeyForTs(ts) {
+  const d = new Date(ts);
+  return `${HIST_PREFIX}${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+export function groupHistoryByShard(history) {
+  const map = new Map();
+  for (const it of history) {
+    const k = shardKeyForTs(it.timestamp);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(it);
+  }
+  return map;
+}
+
+export async function writeHistoryShards(history) {
+  const groups = groupHistoryByShard(history);
+  const index = {};
+  const payload = {};
+  for (const [k, arr] of groups) {
+    payload[k] = arr;
+    index[k] = arr.length;
+  }
+  payload[HIST_INDEX] = index;
+  await chrome.storage.local.set(payload);
+  return index;
+}
+
 export async function loadStore() {
   const all = await chrome.storage.local.get(null);
   const store = emptyStore();
-  for (const key of STORE_KEYS)
+  for (const key of STORE_KEYS) {
+    if (key === "history") continue;
     store[key] = Array.isArray(all[key]) ? all[key] : [];
+  }
+  const index = all[HIST_INDEX];
+  if (index && typeof index === "object") {
+    const hist = [];
+    for (const k of Object.keys(index)) {
+      if (Array.isArray(all[k])) hist.push(...all[k]);
+    }
+    hist.sort((a, b) => a.timestamp - b.timestamp);
+    store.history = hist;
+  } else {
+    store.history = Array.isArray(all.history) ? all.history : [];
+    if (store.history.length > 0 || !all[HIST_MIGRATED]) {
+      await writeHistoryShards(store.history);
+      await chrome.storage.local.set({ [HIST_MIGRATED]: true });
+      await chrome.storage.local.remove("history");
+    }
+  }
   return { store, all };
+}
+
+// Persiste el store completo sincronizando shards + índice y eliminando
+// shards huérfanos y la clave legacy `history`.
+export async function persistStore(store) {
+  const groups = groupHistoryByShard(store.history);
+  const index = {};
+  const payload = {};
+  for (const key of STORE_KEYS) {
+    if (key === "history") continue;
+    payload[key] = store[key];
+  }
+  for (const [k, arr] of groups) {
+    payload[k] = arr;
+    index[k] = arr.length;
+  }
+  payload[HIST_INDEX] = index;
+  payload[HIST_MIGRATED] = true;
+  await chrome.storage.local.set(payload);
+  const all = await chrome.storage.local.get(null);
+  const orphans = Object.keys(all).filter(
+    (k) => k.startsWith(HIST_PREFIX) && !groups.has(k),
+  );
+  if (orphans.length) await chrome.storage.local.remove(orphans);
+  await chrome.storage.local.remove("history");
+}
+
+export async function clearAllData() {
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter(
+    (k) =>
+      STORE_KEYS.includes(k) ||
+      k.startsWith(HIST_PREFIX) ||
+      k === HIST_INDEX ||
+      k === "history",
+  );
+  if (keys.length) await chrome.storage.local.remove(keys);
+  await chrome.storage.local.set({ [HIST_INDEX]: {}, [HIST_MIGRATED]: true });
 }
 
 export function migrateMusicFlags(data) {
@@ -80,8 +169,8 @@ export function migrateMusicFlags(data) {
 }
 
 export async function persistMusicFlags(store) {
+  await writeHistoryShards(store.history);
   await chrome.storage.local.set({
-    history: store.history,
     skips: store.skips,
     interactions: store.interactions,
   });
@@ -115,8 +204,6 @@ export async function exportPngCard(cardData, btn) {
 }
 
 export async function buildExportZip(store, cardData, onProgress, opts = {}) {
-  // Por defecto NO se descarga ninguna imagen para el ZIP.
-  // Pasá { includeImages: true } como 4º argumento para el comportamiento viejo.
   const includeImages = opts.includeImages === true;
   const imageTasks = [];
   const seenUrls = new Set();
@@ -131,7 +218,6 @@ export async function buildExportZip(store, cardData, onProgress, opts = {}) {
     usedNames.add(`${folder}/${unique}`);
     imageTasks.push({ url, folder, slug: unique });
   };
-
   if (includeImages) {
     store.history.forEach((it) =>
       queueImage(it.artwork, "imagenes/portadas", it.videoId || it.title),
@@ -150,7 +236,6 @@ export async function buildExportZip(store, cardData, onProgress, opts = {}) {
       queueImage(sk.artwork, "imagenes/portadas", sk.videoId || sk.title),
     );
   }
-
   const zipFiles = [];
   const imageMap = {};
   let done = 0;
@@ -174,7 +259,6 @@ export async function buildExportZip(store, cardData, onProgress, opts = {}) {
       }),
     );
   }
-
   if (cardData) {
     const cardBlob = await renderRecapPngBlob(cardData);
     if (cardBlob)
@@ -183,7 +267,6 @@ export async function buildExportZip(store, cardData, onProgress, opts = {}) {
         data: new Uint8Array(await cardBlob.arrayBuffer()),
       });
   }
-
   const payload = { exportedAt: new Date().toISOString(), ...store, imageMap };
   zipFiles.unshift({
     name: "recap-backup.json",
@@ -323,6 +406,7 @@ export class NowPlaying {
       needSync = false,
       dataChanged = false;
     const updates = {};
+    const changedHistShards = [];
     for (const [key, change] of Object.entries(changes)) {
       if (key.startsWith("np_")) {
         if (change.newValue) {
@@ -334,12 +418,30 @@ export class NowPlaying {
             needSync = true;
         } else this.np.delete(key);
         npChanged = true;
+      } else if (key.startsWith(HIST_PREFIX)) {
+        changedHistShards.push(key);
+        dataChanged = true;
+      } else if (key === HIST_INDEX) {
+        dataChanged = true;
       } else if (STORE_KEYS.includes(key)) {
         updates[key] = change.newValue || [];
         dataChanged = true;
       }
     }
-    return { npChanged, needSync, dataChanged, updates };
+    return { npChanged, needSync, dataChanged, updates, changedHistShards };
+  }
+  // Reconstruye store.history reemplazando solo los shards afectados.
+  async reloadHistoryShards(store, shardKeys) {
+    if (!shardKeys.length) return;
+    const data = await chrome.storage.local.get(shardKeys);
+    const affected = new Set(shardKeys);
+    const kept = store.history.filter(
+      (it) => !affected.has(shardKeyForTs(it.timestamp)),
+    );
+    for (const k of shardKeys)
+      if (Array.isArray(data[k])) kept.push(...data[k]);
+    kept.sort((a, b) => a.timestamp - b.timestamp);
+    store.history = kept;
   }
   removeTab(tabId) {
     this.tabs.delete(tabId);
