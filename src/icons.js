@@ -1,7 +1,5 @@
 // src/icons.js
-
 const P = (d, extra = "") => `<path d="${d}" ${extra} />`;
-
 const PATHS = {
   play: P("M8 5.4v13.2L19 12z", 'fill="currentColor" stroke="none"'),
   pause:
@@ -42,6 +40,11 @@ const PATHS = {
   mini:
     P("M3 5.5h18v13H3z") +
     P("M12 11h6v5h-6z", 'fill="currentColor" stroke="none"'),
+  panelRight: P("M3 5h18v14H3z") + P("M15 5v14") + P("M17 8h2") + P("M17 12h2"),
+  library:
+    P("M4 4h2.5v16H4z", 'fill="currentColor" stroke="none"') +
+    P("M9 4h2.5v16H9z", 'fill="currentColor" stroke="none"') +
+    P("M13.5 4.6l2.4-.6 4 15.4-2.4.6z", 'fill="currentColor" stroke="none"'),
   close: P("M6 6l12 12") + P("M18 6L6 18"),
   search:
     P("M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13z") + P("M15.5 15.5L20 20"),
@@ -140,7 +143,6 @@ const PATHS = {
     P("M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z") +
     P("M5 11a7 7 0 0 0 14 0") +
     P("M12 18v3"),
-  // v2.7
   area:
     P("M3 17l5-6 4 3 5-7 4 4v6H3z", 'fill="currentColor" stroke="none"') +
     P("M3 17l5-6 4 3 5-7 4 4"),
@@ -159,12 +161,10 @@ const PATHS = {
     P("M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z") +
     P("M12 11.5a.5.5 0 1 1 0 1 .5.5 0 0 1 0-1z"),
 };
-
 export function icon(name, size = 20, cls = "") {
   const body = PATHS[name] || PATHS.spark;
   return `<svg class="ico ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
 }
-
 export function mountIcons(root = document) {
   root.querySelectorAll("[data-icon]").forEach((el) => {
     el.innerHTML = icon(el.dataset.icon, Number(el.dataset.size || 20));

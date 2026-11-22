@@ -13,7 +13,6 @@
     />
     <link rel="stylesheet" href="popup.css" />
   </head>
-
   <body>
     <header>
       <div class="title-row">
@@ -52,14 +51,12 @@
           </button>
         </div>
       </div>
-
       <div
         id="statusBanner"
         class="status-banner"
         aria-live="polite"
         hidden
       ></div>
-
       <div id="nowPlayingCard" class="now-playing">
         <div class="np-empty" id="npEmpty">
           <span class="dot offline" aria-hidden="true"></span> Nada
@@ -95,13 +92,12 @@
                 <div id="npBarFill" class="np-bar-fill"></div>
               </div>
               <div class="np-time-row">
-                <span id="npTime">0:00 / 0:00</span>
-                <span id="npCountState" class="np-count-state"></span>
+                <span id="npTime">0:00 / 0:00</span
+                ><span id="npCountState" class="np-count-state"></span>
               </div>
             </div>
           </div>
         </div>
-
         <div id="npOtherWrap" class="np-other-wrap" hidden>
           <div id="npOtherHeader" class="np-other-header">
             Otras pestañas abiertas (0)
@@ -109,7 +105,6 @@
           <ul id="npOtherList" class="np-other-list"></ul>
         </div>
       </div>
-
       <section class="filters-section" aria-label="Filtros globales">
         <div class="filters">
           <select id="periodSelect">
@@ -130,7 +125,6 @@
         </div>
       </section>
     </header>
-
     <nav class="tabs" aria-label="Secciones principales">
       <button type="button" class="tab-btn active" data-tab="summary">
         Resumen
@@ -143,7 +137,6 @@
       <button type="button" class="tab-btn" data-tab="channels">Canales</button>
       <button type="button" class="tab-btn" data-tab="likes">Likes</button>
     </nav>
-
     <main id="appMain">
       <section id="tab-summary" class="tab-panel active">
         <div class="stats-grid">
@@ -174,7 +167,6 @@
             ><strong id="peakHour">—</strong>
           </div>
         </div>
-
         <section class="top-section">
           <div class="section-header">
             <h2>Top escuchado / visto</h2>
@@ -206,7 +198,6 @@
           </p>
         </section>
       </section>
-
       <section id="tab-recent" class="tab-panel" hidden>
         <div class="sub-pills">
           <button type="button" class="sub-pill active" data-recent="plays">
@@ -227,13 +218,11 @@
           Sin actividad reciente en esta categoría.
         </p>
       </section>
-
       <section id="tab-activity" class="tab-panel" hidden>
         <section id="categoriesBox" class="activity-box" hidden>
           <h2>Categorías / Géneros</h2>
           <div id="categoriesList" class="cat-bars"></div>
         </section>
-
         <section class="activity-box">
           <h2>Actividad por hora del día (00h – 23h)</h2>
           <div id="hoursChart" class="hours-chart"></div>
@@ -242,37 +231,28 @@
             ><span>23h</span>
           </div>
         </section>
-
         <section class="activity-box">
           <h2>Formatos, origen e interacciones</h2>
           <div id="breakdownStats" class="breakdown-grid"></div>
         </section>
-
         <section id="searchesBox" class="activity-box" hidden>
           <h2>Top Búsquedas</h2>
           <ul id="topSearchesList" class="top-list compact"></ul>
         </section>
-
         <section id="albumsBox" class="activity-box" hidden>
           <h2>Top Álbumes (YT Music)</h2>
           <ul id="topAlbumsList" class="top-list compact"></ul>
         </section>
-
         <section class="activity-box">
           <h2>Top 5 Artistas / Canales</h2>
           <ul id="topArtistsList" class="top-list compact"></ul>
         </section>
-
         <section id="skipsBox" class="activity-box" hidden>
           <h2>Más salteadas (&lt; 20s)</h2>
           <ul id="topSkipsList" class="top-list compact"></ul>
         </section>
       </section>
-
-      <!-- El markup del calendario se inyecta desde src/calendarMarkup.js
-           para compartir una única fuente con el modo pestaña completa. -->
       <section id="tab-calendar" class="tab-panel" hidden></section>
-
       <section id="tab-channels" class="tab-panel" hidden>
         <div class="stats-grid">
           <div class="stat-card">
@@ -290,7 +270,6 @@
             >
           </div>
         </div>
-
         <section class="cal-section">
           <h2>
             <span aria-hidden="true">⏱️</span> Top canales por duración
@@ -301,7 +280,6 @@
             Todavía no hay reproducciones registradas por canal.
           </p>
         </section>
-
         <section class="cal-section">
           <h2>Ranking general de canales</h2>
           <div class="sub-pills compact-pills">
@@ -354,7 +332,6 @@
             No hay canales que coincidan con este filtro.
           </p>
         </section>
-
         <section class="cal-section">
           <h2>Últimas visitas directas a canales</h2>
           <ul id="channelsRecentList" class="top-list compact"></ul>
@@ -363,7 +340,6 @@
           </p>
         </section>
       </section>
-
       <section id="tab-likes" class="tab-panel" hidden>
         <div class="stats-grid">
           <div class="stat-card">
@@ -385,7 +361,6 @@
             >
           </div>
         </div>
-
         <section class="cal-section">
           <h2>
             <span aria-hidden="true">❤️</span> Videos y canciones con Me gusta
@@ -395,15 +370,13 @@
             Todavía no diste Me gusta en este período.
           </p>
         </section>
-
         <section class="cal-section">
           <h2><span aria-hidden="true">🔔</span> Nuevas suscripciones</h2>
           <ul id="subsList" class="top-list compact"></ul>
           <p id="subsEmpty" class="empty-msg small" hidden>
-            Todavía no registraste nuevas suscripciones en este período.
+            Todavía no registraste nuevas suscripciones.
           </p>
         </section>
-
         <section class="cal-section">
           <h2><span aria-hidden="true">🔍</span> Últimas búsquedas</h2>
           <ul id="socialSearchesList" class="top-list compact"></ul>
@@ -413,7 +386,6 @@
         </section>
       </section>
     </main>
-
     <footer>
       <button id="enrichMusicBtn" type="button" class="footer-link">
         Reclasificar música importada
@@ -422,7 +394,6 @@
         Borrar historial local
       </button>
     </footer>
-
     <template id="trackRowTpl">
       <li class="top-item">
         <span class="rank"></span>
@@ -434,7 +405,6 @@
         <div class="track-stats"></div>
       </li>
     </template>
-
     <template id="otherTabTpl">
       <li>
         <button type="button" class="np-other-btn">
@@ -454,7 +424,6 @@
         </button>
       </li>
     </template>
-
     <dialog id="confirmClearDialog" class="confirm-dialog">
       <h2 class="dialog-title">¿Borrar historial local?</h2>
       <p class="dialog-desc">
@@ -470,7 +439,6 @@
         </button>
       </div>
     </dialog>
-
     <script type="module" src="src/popup.js"></script>
   </body>
 </html>

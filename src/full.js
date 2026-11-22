@@ -1,5 +1,4 @@
-// src/full.js — v2.7
-
+// src/full.js — v3.0 (Spotify 2026)
 import {
   translateCategory,
   toDateKey,
@@ -57,6 +56,7 @@ import { createMonogram, attachImgFallback } from "./monogram.js";
 
 const $ = (id) => document.getElementById(id);
 const urlParams = new URLSearchParams(location.search);
+
 const PERIODS = [
   ["7", "7 días"],
   ["30", "30 días"],
@@ -93,6 +93,8 @@ const state = {
   hoursMode: localStorage.getItem("recapHoursMode") || "bars",
   showGhost: localStorage.getItem("recapGhost") !== "0",
   animateNext: true,
+  libQuery: "",
+  npOpen: false,
 };
 
 const store = emptyStore();
@@ -120,12 +122,18 @@ let domCal = null;
 
 const els = {
   mainCol: $("mainCol"),
+  topbar: $("topbar"),
+  navBack: $("navBack"),
+  navFwd: $("navFwd"),
+  homeBtn: $("homeBtn"),
   brandBtn: $("brandBtn"),
   brandLogo: $("brandLogo"),
   brandWord: $("brandWord"),
   sideNav: $("sideNav"),
   peopleLabel: $("peopleLabel"),
+  libraryLabel: $("libraryLabel"),
   newPlaylistBtn: $("newPlaylistBtn"),
+  libSearch: $("libSearch"),
   sideLists: $("sideLists"),
   globalSearch: $("globalSearch"),
   searchDrop: $("searchDrop"),
@@ -153,6 +161,7 @@ const els = {
   pbPlay: $("pbPlay"),
   pbNext: $("pbNext"),
   pbTime: $("pbTime"),
+  pbTimeTotal: $("pbTimeTotal"),
   pbThumb: $("pbThumb"),
   pbTitle: $("pbTitle"),
   pbArtist: $("pbArtist"),
@@ -167,15 +176,20 @@ const els = {
   pbShuffle: $("pbShuffle"),
   pbQueue: $("pbQueue"),
   pbJump: $("pbJump"),
-  miniplayer: $("miniplayer"),
-  mpHead: $("mpHead"),
-  mpClose: $("mpClose"),
-  mpThumb: $("mpThumb"),
-  mpTitle: $("mpTitle"),
-  mpArtist: $("mpArtist"),
-  mpFill: $("mpFill"),
-  mpPlay: $("mpPlay"),
-  mpJump: $("mpJump"),
+  npPanel: $("npPanel"),
+  npClose: $("npClose"),
+  npArt: $("npArt"),
+  npPlay: $("npPlay"),
+  npTitle: $("npTitle"),
+  npArtist: $("npArtist"),
+  npLike: $("npLike"),
+  npSource: $("npSource"),
+  npLoopBadge: $("npLoopBadge"),
+  npPinned: $("npPinned"),
+  npStale: $("npStale"),
+  npMeta: $("npMeta"),
+  npCount: $("npCount"),
+  npJump: $("npJump"),
   queuePop: $("queuePop"),
   chartTip: $("chartTip"),
   toast: $("toast"),
@@ -519,7 +533,7 @@ function tipify(node, textFn) {
   node.addEventListener("mouseleave", hideTip);
 }
 
-// ---------- router ----------
+// ---------- router + historial ----------
 function parseHash() {
   const m = location.hash.match(/^#\/(music|youtube)\/([a-z]+)(?:\/(.+))?$/);
   if (m) {
@@ -527,6 +541,28 @@ function parseHash() {
     state.route = els.routes[m[2]] ? m[2] : "home";
     state.detail = m[3] ? decodeURIComponent(m[3]) : null;
   }
+}
+const navHist = { entries: [], idx: -1 };
+const navKey = (s, r, d) => `${s}|${r}|${d || ""}`;
+function pushNavEntry() {
+  const k = navKey(state.scope, state.route, state.detail);
+  if (navHist.entries[navHist.idx] === k) return;
+  navHist.entries = navHist.entries.slice(0, navHist.idx + 1);
+  navHist.entries.push(k);
+  navHist.idx = navHist.entries.length - 1;
+  updateNavButtons();
+}
+function updateNavButtons() {
+  els.navBack.disabled = navHist.idx <= 0;
+  els.navFwd.disabled = navHist.idx >= navHist.entries.length - 1;
+}
+function goHist(delta) {
+  const i = navHist.idx + delta;
+  if (i < 0 || i >= navHist.entries.length) return;
+  navHist.idx = i;
+  const [s, r, d] = navHist.entries[i].split("|");
+  navigate(s, r, d || null);
+  updateNavButtons();
 }
 function navigate(scope, route, detail = null) {
   state.scope = scope;
@@ -539,12 +575,14 @@ function navigate(scope, route, detail = null) {
     scope === "music" ? "recapRouteMusic" : "recapRouteYoutube",
     route,
   );
+  pushNavEntry();
   const hash = `#/${scope}/${route}${detail ? `/${encodeURIComponent(detail)}` : ""}`;
   if (location.hash !== hash) location.hash = hash;
   else renderAll();
 }
 window.addEventListener("hashchange", () => {
   parseHash();
+  pushNavEntry();
   renderAll();
 });
 
@@ -557,13 +595,13 @@ function sparkArea(values, { w = 320, h = 92, id = "sa" } = {}) {
   );
   const last = pts[pts.length - 1].split(",");
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="var(--accent-red)" stop-opacity=".5"/><stop offset="100%" stop-color="var(--accent-red)" stop-opacity="0"/>
-    </linearGradient></defs>
-    <path d="M0,${h} L${pts.join(" L")} L${w},${h} Z" fill="url(#${id})"/>
-    <polyline points="${pts.join(" ")}" fill="none" stroke="var(--accent-pink)" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${last[0]}" cy="${last[1]}" r="3.5" fill="var(--accent-pink)"/>
-  </svg>`;
+<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="var(--accent-red)" stop-opacity=".5"/><stop offset="100%" stop-color="var(--accent-red)" stop-opacity="0"/>
+</linearGradient></defs>
+<path d="M0,${h} L${pts.join(" L")} L${w},${h} Z" fill="url(#${id})"/>
+<polyline points="${pts.join(" ")}" fill="none" stroke="var(--accent-pink)" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="${last[0]}" cy="${last[1]}" r="3.5" fill="var(--accent-pink)"/>
+</svg>`;
 }
 function microBars(values) {
   const max = Math.max(...values, 1);
@@ -604,8 +642,8 @@ function microRing(ratio) {
     len = Math.min(1, ratio) * c;
   const box = el("div", "micro-ring");
   box.innerHTML = `<svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="${r}" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="4"/>
-    <circle cx="15" cy="15" r="${r}" fill="none" stroke="var(--accent-pink)" stroke-width="4" stroke-linecap="round"
-      stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" transform="rotate(-90 15 15)"/></svg>`;
+<circle cx="15" cy="15" r="${r}" fill="none" stroke="var(--accent-pink)" stroke-width="4" stroke-linecap="round"
+stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" transform="rotate(-90 15 15)"/></svg>`;
   return box;
 }
 
@@ -655,7 +693,6 @@ function kpiStrip(cards, cols) {
   s.append(...cards);
   return s;
 }
-
 function pageHero({
   eyebrow,
   title,
@@ -776,7 +813,6 @@ function emptyState(iconName, msg, action) {
   if (action) box.append(action);
   return box;
 }
-
 function donutChart(segments) {
   const total = segments.reduce((s, x) => s + x.value, 0);
   const wrap = el("div", "donut-wrap");
@@ -839,7 +875,6 @@ function donutChart(segments) {
   wrap.append(legend);
   return wrap;
 }
-
 function barChart({
   values,
   prev,
@@ -940,7 +975,6 @@ function barChart({
   wrap.append(lbl);
   return wrap;
 }
-
 function insightsPanel(items) {
   const p = panel({
     iconName: "bulb",
@@ -992,7 +1026,6 @@ function runInsight(a) {
     navigate(state.scope, "explore");
   } else if (a.type === "people") navigate(state.scope, "people", a.name);
 }
-
 function rankRow({
   rank,
   thumb,
@@ -1117,10 +1150,7 @@ function heroVisualExplore() {
       img.loading = "lazy";
       attachImgFallback(img, t.artist);
       covers.append(img);
-    } else {
-      const mo = createMonogram(t.artist || t.title);
-      covers.append(mo);
-    }
+    } else covers.append(createMonogram(t.artist || t.title));
   }
   v.append(total, chart, covers);
   v.title = "Ver el mes más fuerte en el calendario";
@@ -1149,10 +1179,10 @@ function heroVisualCalendar() {
     h = 7 * (size + gap);
   const colors = [
     "var(--surface-inset)",
-    "#15803d",
-    "#16a34a",
-    "#22c55e",
-    "#4ade80",
+    "var(--heat-1)",
+    "var(--heat-2)",
+    "var(--heat-3)",
+    "var(--heat-4)",
   ];
   const rects = heat.cells
     .map((c, i) => {
@@ -1234,6 +1264,10 @@ function renderShell() {
   els.brandBtn.setAttribute("aria-label", els.brandBtn.title);
   els.peopleLabel.textContent =
     state.scope === "music" ? "Artistas" : "Canales";
+  els.libraryLabel.textContent = isMusicScope()
+    ? "Tus artistas"
+    : "Tus canales";
+  els.homeBtn.classList.toggle("active", state.route === "home");
   els.sideNav.querySelectorAll(".side-link").forEach((b) => {
     const active = b.dataset.route === state.route;
     b.classList.toggle("active", active);
@@ -1263,32 +1297,39 @@ function renderShell() {
 function renderSideLists() {
   const vm = vmHome(),
     nodes = [];
+  const q = (state.libQuery || "").trim().toLowerCase();
   const liked = meta(store.interactions).filter((it) => it.type === "like");
-  const likedBtn = el("button", "side-list");
-  likedBtn.type = "button";
-  const lt = el("strong");
-  lt.innerHTML = icon("heartFill", 12);
-  lt.append(isMusicScope() ? " Liked Music" : " Me gusta (videos)");
-  likedBtn.append(
-    lt,
-    el("span", null, `${liked.length} me gusta · lista generada`),
-  );
-  likedBtn.addEventListener("click", () => navigate(state.scope, "likes"));
-  nodes.push(likedBtn);
-  for (const m of vm.months.slice(0, 8)) {
-    if (!m.plays) continue;
-    const b = el("button", "side-list");
+  const likedLabel = isMusicScope() ? "Liked Music" : "Me gusta (videos)";
+  if (!q || likedLabel.toLowerCase().includes(q)) {
+    const b = el("button", "lib-row");
     b.type = "button";
+    const cov = el("span", "lib-cover liked");
+    cov.innerHTML = icon("heartFill", 18);
+    const m = el("div", "lib-meta");
+    m.append(
+      el("strong", null, likedLabel),
+      el("span", null, `${liked.length} me gusta · lista`),
+    );
+    b.append(cov, m);
+    b.addEventListener("click", () => navigate(state.scope, "likes"));
+    nodes.push(b);
+  }
+  for (const m of vm.months.slice(0, 12)) {
+    if (!m.plays) continue;
+    const label = `${m.label} Recap '${String(m.year).slice(2)}`;
+    if (q && !label.toLowerCase().includes(q)) continue;
+    const b = el("button", "lib-row");
+    b.type = "button";
+    const cov = el("span", "lib-cover month", m.label.slice(0, 1));
+    const metaBox = el("div", "lib-meta");
     const s = el(
       "span",
       null,
       `${formatDuration(m.seconds)} · ${m.plays} rep.`,
     );
     s.dataset.month = `${m.y}-${m.m}`;
-    b.append(
-      el("strong", null, `${m.label} Recap '${String(m.year).slice(2)}`),
-      s,
-    );
+    metaBox.append(el("strong", null, label), s);
+    b.append(cov, metaBox);
     b.addEventListener("click", () => {
       calUi.calYear = m.y;
       calUi.calMonth = m.m;
@@ -1298,6 +1339,8 @@ function renderSideLists() {
     });
     nodes.push(b);
   }
+  if (!nodes.length)
+    nodes.push(el("div", "lib-meta", "Sin resultados en tu biblioteca."));
   els.sideLists.replaceChildren(...nodes);
 }
 function updateMetricsInPlace() {
@@ -1800,7 +1843,6 @@ function renderExplore() {
   const host = els.routes.explore;
   host.replaceChildren();
   const noPrevNote = ins.hasPrev ? null : "primer período con datos";
-
   host.append(
     pageHero({
       eyebrow: `${scopeName()} · ${periodLabel()}`,
@@ -1822,7 +1864,6 @@ function renderExplore() {
       ],
     }),
   );
-
   host.append(
     kpiStrip([
       kpiCard({
@@ -1890,7 +1931,6 @@ function renderExplore() {
       }),
     ]),
   );
-
   const grid = el("div", "route-grid");
   const hourLabels = Array.from({ length: 24 }, (_, i) =>
     [0, 6, 12, 18, 23].includes(i) ? `${String(i).padStart(2, "0")}h` : "",
@@ -1965,7 +2005,7 @@ function renderExplore() {
   legend.append(
     lg("var(--data-lo)", "este período"),
     lg("var(--annotate)", "pico"),
-    lg("rgba(56,189,248,.6)", "promedio / anterior"),
+    lg("var(--compare)", "promedio / anterior"),
     lg("rgba(255,255,255,.2)", "madrugada"),
   );
   dayBody.append(legend);
@@ -1979,7 +2019,6 @@ function renderExplore() {
       body: dayBody,
     }),
   );
-
   const wdSec = new Array(7).fill(0),
     wdPlays = new Array(7).fill(0);
   for (const p of plays) {
@@ -2012,7 +2051,6 @@ function renderExplore() {
       body: weekChart,
     }),
   );
-
   grid.append(
     panel({
       iconName: "disc",
@@ -2022,7 +2060,6 @@ function renderExplore() {
       body: donutChart(vmFormats()),
     }),
   );
-
   const catBody = el("div");
   if (vm.catEntries.length) {
     const bars = el("div", "cat-bars");
@@ -2086,9 +2123,7 @@ function renderExplore() {
       body: catBody,
     }),
   );
-
   grid.append(insightsPanel(vmNarrative()));
-
   if (state.hourFilter != null) {
     const hourPlays = plays
       .filter((p) => new Date(p.timestamp).getHours() === state.hourFilter)
@@ -2100,19 +2135,21 @@ function renderExplore() {
       );
     else {
       const list = el("div", "pt");
-      hourPlays.slice(0, 20).forEach((p, i) =>
-        list.append(
-          rankRow({
-            rank: i + 1,
-            thumb: p.artwork,
-            name: p.title,
-            sub: `${p.artist} · ${formatTimeEs(p.timestamp)}`,
-            tag: formatTag(p),
-            value: formatClock(p.seconds || 0),
-            href: resolveVideoUrl(p),
-          }),
-        ),
-      );
+      hourPlays
+        .slice(0, 20)
+        .forEach((p, i) =>
+          list.append(
+            rankRow({
+              rank: i + 1,
+              thumb: p.artwork,
+              name: p.title,
+              sub: `${p.artist} · ${formatTimeEs(p.timestamp)}`,
+              tag: formatTag(p),
+              value: formatClock(p.seconds || 0),
+              href: resolveVideoUrl(p),
+            }),
+          ),
+        );
       body.append(list);
     }
     grid.append(
@@ -2126,7 +2163,6 @@ function renderExplore() {
     );
   }
   host.append(grid);
-
   if (!sum.empty) {
     host.append(
       shelf({
@@ -2367,7 +2403,6 @@ function renderPeople() {
       kpis,
     }),
   );
-
   const sortItems = music
     ? [
         { value: "time", label: "Tiempo", icon: "clock" },
@@ -2715,18 +2750,20 @@ function renderPersonDetail(host, name) {
       span: 12,
     });
     const list = el("div", "pt");
-    detail.likes.slice(0, 20).forEach((it, i) =>
-      list.append(
-        rankRow({
-          rank: i + 1,
-          thumb: it.artwork,
-          name: it.title,
-          sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
-          value: "Abrir ↗",
-          href: it.videoUrl,
-        }),
-      ),
-    );
+    detail.likes
+      .slice(0, 20)
+      .forEach((it, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: it.artwork,
+            name: it.title,
+            sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
+            value: "Abrir ↗",
+            href: it.videoUrl,
+          }),
+        ),
+      );
     p._body.append(list);
     host.append(p);
   }
@@ -2899,19 +2936,21 @@ function paintLikesBody() {
       );
     else {
       const list = el("div", "pt");
-      vm.subs.slice(0, 8).forEach((it, i) =>
-        list.append(
-          rankRow({
-            rank: i + 1,
-            thumb: it.artwork,
-            round: true,
-            name: it.title,
-            sub: relativeTime(it.timestamp),
-            value: "Canal ↗",
-            href: it.channelUrl,
-          }),
-        ),
-      );
+      vm.subs
+        .slice(0, 8)
+        .forEach((it, i) =>
+          list.append(
+            rankRow({
+              rank: i + 1,
+              thumb: it.artwork,
+              round: true,
+              name: it.title,
+              sub: relativeTime(it.timestamp),
+              value: "Canal ↗",
+              href: it.channelUrl,
+            }),
+          ),
+        );
       rail._body.append(list);
     }
     grid.append(rail);
@@ -3129,6 +3168,7 @@ function renderAll() {
   renderShell();
   renderRoute();
   renderPlayer();
+  updateAmbient();
 }
 function refreshData() {
   const sigs = computeSigs(),
@@ -3139,10 +3179,11 @@ function refreshData() {
     renderShell();
     renderRoute();
     els.content.scrollTop = top;
+    updateAmbient();
   } else if (prev.metrics !== sigs.metrics) updateMetricsInPlace();
 }
 
-// ---------- playerbar ----------
+// ---------- playerbar + now playing ----------
 function renderPlayer() {
   const sel = npService.select(state.pinnedNpTabId);
   const np = sel?.primary || null;
@@ -3156,48 +3197,68 @@ function renderPlayer() {
     els.pbLoopBadge.hidden = true;
     els.pbPinned.hidden = true;
     els.pbStale.hidden = true;
-    els.pbTime.textContent = "0:00 / 0:00";
+    els.pbTime.textContent = "0:00";
+    els.pbTimeTotal.textContent = "0:00";
     els.pbSeek.value = 0;
     els.pbSeek.style.setProperty("--pb-fill", "0%");
     els.pbPlay.innerHTML = icon("play", 18);
     els.pbLike.innerHTML = icon("heart", 18);
     els.pbLike.classList.remove("on");
-    els.mpTitle.textContent = "—";
-    els.mpArtist.textContent = "—";
-    els.mpFill.style.width = "0%";
-    els.mpPlay.innerHTML = icon("play", 16);
+    els.npArt.removeAttribute("src");
+    els.npTitle.textContent = "Nada reproduciéndose";
+    els.npArtist.textContent = "Abrí YouTube o YT Music";
+    els.npSource.textContent = "—";
+    els.npLoopBadge.hidden = true;
+    els.npPinned.hidden = true;
+    els.npStale.hidden = true;
+    els.npPlay.innerHTML = icon("play", 22);
+    els.npLike.innerHTML = icon("heart", 18);
+    els.npLike.classList.remove("on");
+    els.npMeta.replaceChildren();
+    els.npCount.textContent = "";
+    els.npCount.classList.remove("saved");
     renderQueue([]);
     return;
   }
   if (np.artwork) {
     els.pbThumb.src = np.artwork;
-    els.mpThumb.src = np.artwork;
+    els.npArt.src = np.artwork;
   } else {
     els.pbThumb.removeAttribute("src");
-    els.mpThumb.removeAttribute("src");
+    els.npArt.removeAttribute("src");
   }
   els.pbTitle.textContent = np.title;
   els.pbArtist.textContent = np.album
     ? `${np.artist} · ${np.album}`
     : np.artist;
-  els.mpTitle.textContent = np.title;
-  els.mpArtist.textContent = np.artist;
-  els.pbSource.hidden = false;
-  els.pbSource.textContent =
+  els.npTitle.textContent = np.title;
+  els.npArtist.textContent = np.album
+    ? `${np.artist} · ${np.album}`
+    : np.artist;
+  const srcLabel =
     np.source === "yt_music"
       ? "YT Music"
       : np.isMusic
         ? "YouTube · Música"
         : "YouTube";
+  els.pbSource.hidden = false;
+  els.pbSource.textContent = srcLabel;
+  els.npSource.textContent = srcLabel;
   els.pbLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
+  els.npLoopBadge.hidden = !(np.loopActive || np.isLoopSession);
   els.pbPinned.hidden = state.pinnedNpTabId == null;
-  els.pbStale.hidden = !(!np.paused && Date.now() - np.updatedAt > 90000);
+  els.npPinned.hidden = state.pinnedNpTabId == null;
+  const stale = !np.paused && Date.now() - np.updatedAt > 90000;
+  els.pbStale.hidden = !stale;
+  els.npStale.hidden = !stale;
   els.pbPlay.innerHTML = icon(np.paused ? "play" : "pause", 18);
-  els.mpPlay.innerHTML = icon(np.paused ? "play" : "pause", 16);
+  els.npPlay.innerHTML = icon(np.paused ? "play" : "pause", 22);
   els.pbMute.innerHTML = icon(np.muted ? "mute" : "volume", 18);
   els.pbLoop.classList.toggle("on", Boolean(np.loopActive || np.isLoopSession));
   els.pbLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
   els.pbLike.classList.toggle("on", np.liked === true);
+  els.npLike.innerHTML = icon(np.liked === true ? "heartFill" : "heart", 18);
+  els.npLike.classList.toggle("on", np.liked === true);
   els.pbLike.title =
     np.liked == null
       ? "Estado de like no disponible en esta pestaña"
@@ -3218,16 +3279,39 @@ function renderPlayer() {
         ? `${formatClock(np.currentTime)} de ${formatClock(np.duration)}`
         : formatClock(np.currentTime),
     );
-    els.mpFill.style.width = `${(pct * 100).toFixed(1)}%`;
   }
-  els.pbTime.textContent =
-    np.duration > 0
-      ? `${formatClock(np.currentTime)} / ${formatClock(np.duration)}`
-      : formatClock(np.currentTime);
+  els.pbTime.textContent = formatClock(np.currentTime);
+  els.pbTimeTotal.textContent =
+    np.duration > 0 ? formatClock(np.duration) : "0:00";
+  const remaining = Math.max(
+    0,
+    (np.minRequired || 20) - (np.sessionSeconds || 0),
+  );
+  if (remaining === 0) {
+    els.npCount.textContent = "✓ Registrado en tu recap";
+    els.npCount.classList.add("saved");
+  } else {
+    els.npCount.textContent = `Se registra en ${remaining}s`;
+    els.npCount.classList.remove("saved");
+  }
+  const metaBits = [];
+  if (np.category) metaBits.push(translateCategory(np.category));
+  if (np.contentType === "short") metaBits.push("Short");
+  else if (np.contentType === "live") metaBits.push("En vivo");
+  if (np.context === "mix") metaBits.push("Mix");
+  else if (np.context === "playlist") metaBits.push("Playlist");
+  if (np.playbackRate && np.playbackRate !== 1)
+    metaBits.push(`${np.playbackRate}x`);
+  els.npMeta.replaceChildren(
+    ...metaBits.map((t) => {
+      const b = el("span", "badge source", t);
+      return b;
+    }),
+  );
   renderQueue(sel?.others || []);
 }
 function renderQueue(others) {
-  if (els.queuePop.hidden) return;
+  if (els.npPanel.hidden) return;
   const nodes = [el("div", "queue-title", `Otras pestañas (${others.length})`)];
   if (!others.length)
     nodes.push(
@@ -3294,6 +3378,17 @@ function renderQueue(others) {
     nodes.push(wrap);
   }
   els.queuePop.replaceChildren(...nodes);
+}
+function setNpOpen(open) {
+  state.npOpen = open;
+  els.npPanel.hidden = !open;
+  localStorage.setItem("recapNpOpen", open ? "1" : "0");
+  els.miniToggleBtn.classList.toggle("active", open);
+  els.miniToggleBtn.setAttribute("aria-pressed", String(open));
+  if (open) renderPlayer();
+}
+function toggleNp() {
+  setNpOpen(!state.npOpen);
 }
 
 // ---------- búsqueda ----------
@@ -3416,50 +3511,117 @@ function renderSearchDrop(q) {
   state.searchIndex = -1;
 }
 
-// ---------- miniplayer ----------
-function applyMiniPos() {
-  try {
-    const raw = localStorage.getItem("recapMiniPos");
-    if (!raw) return;
-    const { x, y } = JSON.parse(raw);
-    if (Number.isFinite(x) && Number.isFinite(y)) {
-      els.miniplayer.classList.add("dragged");
-      els.miniplayer.style.left = `${Math.min(Math.max(8, x), innerWidth - 310)}px`;
-      els.miniplayer.style.top = `${Math.min(Math.max(8, y), innerHeight - 260)}px`;
+// ---------- ambient header ----------
+const ambientCache = new Map();
+let ambientToken = 0;
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b),
+    min = Math.min(r, g, b);
+  let h = 0,
+    s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      default:
+        h = (r - g) / d + 4;
     }
+    h /= 6;
+  }
+  return [Math.round(h * 360), Math.round(s * 100), Math.round(l * 100)];
+}
+function pickAmbientArt() {
+  try {
+    if (state.route === "people" && state.detail) {
+      const d = isMusicScope()
+        ? memoVM(`artistDetail:${state.detail}`, () =>
+            artistDetailVM(
+              state.detail,
+              allPlays(),
+              metaAll(store.interactions),
+            ),
+          )
+        : memoVM(`channelDetail:${state.detail}`, () =>
+            channelDetailVM(
+              state.detail,
+              allPlays(),
+              metaAll(store.channelVisits),
+            ),
+          );
+      return (isMusicScope() ? d?.artwork : d?.avatar) || "";
+    }
+    if (state.route === "likes") return vmLikesPage().collage[0] || "";
+    if (state.route === "people") {
+      const a = vmDirectory().list[0];
+      return a?.artwork || a?.avatar || "";
+    }
+    const sum = vmSummary();
+    return sum.empty ? "" : sum.topTracks[0]?.artwork || "";
   } catch {
-    /* ignorar */
+    return "";
   }
 }
-function initMiniDrag() {
-  let dragging = false,
-    offX = 0,
-    offY = 0;
-  els.mpHead.addEventListener("pointerdown", (e) => {
-    if (e.target.closest("button")) return;
-    dragging = true;
-    const r = els.miniplayer.getBoundingClientRect();
-    offX = e.clientX - r.left;
-    offY = e.clientY - r.top;
-    els.mpHead.setPointerCapture(e.pointerId);
-    els.miniplayer.classList.add("dragged");
-  });
-  els.mpHead.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    els.miniplayer.style.left = `${Math.min(Math.max(8, e.clientX - offX), innerWidth - 310)}px`;
-    els.miniplayer.style.top = `${Math.min(Math.max(8, e.clientY - offY), innerHeight - 260)}px`;
-  });
-  const end = () => {
-    if (!dragging) return;
-    dragging = false;
-    const r = els.miniplayer.getBoundingClientRect();
-    localStorage.setItem(
-      "recapMiniPos",
-      JSON.stringify({ x: r.left, y: r.top }),
-    );
+function updateAmbient() {
+  const url = pickAmbientArt();
+  const token = ++ambientToken;
+  if (!url) {
+    els.mainCol.style.removeProperty("--ambient");
+    return;
+  }
+  if (ambientCache.has(url)) {
+    const c = ambientCache.get(url);
+    if (c) els.mainCol.style.setProperty("--ambient", c);
+    else els.mainCol.style.removeProperty("--ambient");
+    return;
+  }
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    if (token !== ambientToken) return;
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = 24;
+      cv.height = 24;
+      const cx = cv.getContext("2d", { willReadFrequently: true });
+      cx.drawImage(img, 0, 0, 24, 24);
+      const data = cx.getImageData(0, 0, 24, 24).data;
+      let r = 0,
+        g = 0,
+        b = 0,
+        n = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const a = data[i + 3];
+        if (a < 128) continue;
+        r += data[i];
+        g += data[i + 1];
+        b += data[i + 2];
+        n++;
+      }
+      if (!n) throw new Error("empty");
+      const [h, s, l] = rgbToHsl(r / n, g / n, b / n);
+      const color = `hsl(${h} ${Math.min(70, Math.max(45, s))}% ${Math.min(40, Math.max(26, l))}%)`;
+      ambientCache.set(url, color);
+      els.mainCol.style.setProperty("--ambient", color);
+    } catch {
+      ambientCache.set(url, "");
+      els.mainCol.style.removeProperty("--ambient");
+    }
   };
-  els.mpHead.addEventListener("pointerup", end);
-  els.mpHead.addEventListener("pointercancel", end);
+  img.onerror = () => {
+    ambientCache.set(url, "");
+    if (token === ambientToken) els.mainCol.style.removeProperty("--ambient");
+  };
+  img.src = url;
 }
 
 // ---------- calendario ----------
@@ -3508,6 +3670,20 @@ function initCalendarTooltips() {
     if (e.target.closest(sel)) hideTip();
   });
 }
+function initTopbarScroll() {
+  const onScroll = () => {
+    const y = els.content.scrollTop;
+    els.topbar.classList.toggle("scrolled", y > 24);
+    els.topbar.style.setProperty("--topbar-o", String(Math.min(1, y / 160)));
+  };
+  els.content.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+}
+function initNavButtons() {
+  els.navBack.addEventListener("click", () => goHist(-1));
+  els.navFwd.addEventListener("click", () => goHist(1));
+  els.homeBtn.addEventListener("click", () => navigate(state.scope, "home"));
+}
 
 // ---------- eventos ----------
 els.brandBtn.addEventListener("click", () => {
@@ -3526,6 +3702,15 @@ els.newPlaylistBtn.addEventListener("click", () =>
     "este período",
   ),
 );
+
+let libTimer = null;
+els.libSearch.addEventListener("input", () => {
+  if (libTimer) clearTimeout(libTimer);
+  libTimer = setTimeout(() => {
+    state.libQuery = els.libSearch.value;
+    renderSideLists();
+  }, 150);
+});
 
 let searchTimer = null;
 els.globalSearch.addEventListener("input", () => {
@@ -3568,8 +3753,6 @@ document.addEventListener("click", (e) => {
     els.searchDrop.hidden = true;
     els.globalSearch.setAttribute("aria-expanded", "false");
   }
-  if (!e.target.closest("#queuePop") && !e.target.closest("#pbQueue"))
-    els.queuePop.hidden = true;
   if (!e.target.closest("#helpPop") && !e.target.closest("#helpBtn"))
     els.helpPop.hidden = true;
 });
@@ -3577,8 +3760,8 @@ document.addEventListener("keydown", (e) => {
   const typing = /^(input|textarea|select)$/i.test(e.target.tagName);
   if (e.key === "Escape") {
     els.helpPop.hidden = true;
-    els.queuePop.hidden = true;
     els.searchDrop.hidden = true;
+    setNpOpen(false);
     return;
   }
   if (
@@ -3625,7 +3808,11 @@ document.addEventListener("keydown", (e) => {
       break;
     case "q":
     case "Q":
-      els.pbQueue.click();
+      toggleNp();
+      break;
+    case "v":
+    case "V":
+      toggleNp();
       break;
     case "?":
     case "h":
@@ -3638,7 +3825,7 @@ els.pbPlay.addEventListener("click", () => {
   if (!state.currentNp) return toast("No hay nada reproduciéndose.");
   sendControl(state.currentNp.paused ? "play" : "pause");
 });
-els.mpPlay.addEventListener("click", () => els.pbPlay.click());
+els.npPlay.addEventListener("click", () => els.pbPlay.click());
 els.pbPrev.addEventListener("click", () => sendControl("prev"));
 els.pbNext.addEventListener("click", () => sendControl("next"));
 els.pbMute.addEventListener("click", () => sendControl("mute"));
@@ -3649,19 +3836,21 @@ els.pbLike.addEventListener("click", async () => {
   const ok = await sendControl("like");
   if (ok) setTimeout(renderPlayer, 700);
 });
+els.npLike.addEventListener("click", () => els.pbLike.click());
 els.pbJump.addEventListener("click", () => {
   if (state.currentTabId != null) jumpToTab(state.currentTabId);
   else toast("No hay pestaña activa.");
 });
-els.mpJump.addEventListener("click", () => els.pbJump.click());
-els.mpThumb.addEventListener("dblclick", () => els.pbJump.click());
+els.npJump.addEventListener("click", () => els.pbJump.click());
 els.pbSeek.addEventListener("input", () => {
   state.seeking = true;
   const np = state.currentNp,
     pct = Number(els.pbSeek.value) / 10;
   els.pbSeek.style.setProperty("--pb-fill", `${pct}%`);
   if (np?.duration > 0)
-    els.pbTime.textContent = `${formatClock((Number(els.pbSeek.value) / 1000) * np.duration)} / ${formatClock(np.duration)}`;
+    els.pbTime.textContent = formatClock(
+      (Number(els.pbSeek.value) / 1000) * np.duration,
+    );
 });
 els.pbSeek.addEventListener("change", () => {
   const np = state.currentNp;
@@ -3676,26 +3865,9 @@ els.pbVol.addEventListener("input", () => {
   if (volTimer) clearTimeout(volTimer);
   volTimer = setTimeout(() => sendControl("volume", v / 100), 120);
 });
-els.pbQueue.addEventListener("click", () => {
-  const open = els.queuePop.hidden;
-  els.queuePop.hidden = !open;
-  if (open) {
-    els.miniplayer.hidden = true;
-    renderPlayer();
-  }
-});
-els.miniToggleBtn.addEventListener("click", () => {
-  const open = els.miniplayer.hidden;
-  els.miniplayer.hidden = !open;
-  if (open) {
-    els.queuePop.hidden = true;
-    applyMiniPos();
-    renderPlayer();
-  }
-});
-els.mpClose.addEventListener("click", () => {
-  els.miniplayer.hidden = true;
-});
+els.pbQueue.addEventListener("click", toggleNp);
+els.miniToggleBtn.addEventListener("click", toggleNp);
+els.npClose.addEventListener("click", () => setNpOpen(false));
 els.helpBtn.addEventListener("click", () => {
   els.helpPop.hidden = !els.helpPop.hidden;
 });
@@ -3816,7 +3988,6 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 window.addEventListener("resize", () => {
   hideTip();
   mountedRows.forEach((fn) => fn());
-  if (!els.miniplayer.hidden) applyMiniPos();
 });
 let playerInterval = null;
 function cleanup() {
@@ -3824,6 +3995,7 @@ function cleanup() {
   if (dataTimer) clearTimeout(dataTimer);
   if (searchTimer) clearTimeout(searchTimer);
   if (volTimer) clearTimeout(volTimer);
+  if (libTimer) clearTimeout(libTimer);
   if (toastTimer) clearTimeout(toastTimer);
   if (toastGapTimer) clearTimeout(toastGapTimer);
   cancelCountUps();
@@ -3871,10 +4043,16 @@ async function init() {
     openInstantPlaylist(calUi.monthTopVideoIds),
   );
   initCalendarTooltips();
-  initMiniDrag();
+  initTopbarScroll();
+  initNavButtons();
+  const savedNp = localStorage.getItem("recapNpOpen");
+  setNpOpen(savedNp == null ? innerWidth >= 1200 : savedNp === "1");
   parseHash();
   if (!location.hash)
     location.hash = `#/${state.scope}/${state.perScopeRoute[state.scope] || "home"}`;
+  navHist.entries = [navKey(state.scope, state.route, state.detail)];
+  navHist.idx = 0;
+  updateNavButtons();
   const [{ store: loaded, all }] = await Promise.all([
     loadStore(),
     npService.sync(),

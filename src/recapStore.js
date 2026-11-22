@@ -30,9 +30,8 @@ export function emptyStore() {
 export async function loadStore() {
   const all = await chrome.storage.local.get(null);
   const store = emptyStore();
-  for (const key of STORE_KEYS) {
+  for (const key of STORE_KEYS)
     store[key] = Array.isArray(all[key]) ? all[key] : [];
-  }
   return { store, all };
 }
 
@@ -115,9 +114,9 @@ export async function exportPngCard(cardData, btn) {
   }
 }
 
-// opts.includeImages === true → descarga y empaqueta las miniaturas (comportamiento viejo).
-// Por defecto NO se descarga ninguna imagen: el ZIP lleva solo JSON + tarjeta PNG.
 export async function buildExportZip(store, cardData, onProgress, opts = {}) {
+  // Por defecto NO se descarga ninguna imagen para el ZIP.
+  // Pasá { includeImages: true } como 4º argumento para el comportamiento viejo.
   const includeImages = opts.includeImages === true;
   const imageTasks = [];
   const seenUrls = new Set();
@@ -175,15 +174,16 @@ export async function buildExportZip(store, cardData, onProgress, opts = {}) {
       }),
     );
   }
+
   if (cardData) {
     const cardBlob = await renderRecapPngBlob(cardData);
-    if (cardBlob) {
+    if (cardBlob)
       zipFiles.push({
         name: "recap-tarjeta.png",
         data: new Uint8Array(await cardBlob.arrayBuffer()),
       });
-    }
   }
+
   const payload = { exportedAt: new Date().toISOString(), ...store, imageMap };
   zipFiles.unshift({
     name: "recap-backup.json",
@@ -223,9 +223,8 @@ export async function enrichImported(store, onProgress) {
   store.history.forEach(push);
   store.skips.forEach(push);
   store.interactions.forEach((it) => it.type === "like" && push(it));
-  if (candidates.length === 0) {
+  if (candidates.length === 0)
     return { updated: 0, consulted: 0, remaining: 0, none: true };
-  }
   const batch = candidates.slice(0, ENRICH_MAX_PER_RUN);
   const remaining = candidates.length - batch.length;
   const results = new Map();
@@ -294,9 +293,8 @@ export class NowPlaying {
         if (
           u.startsWith("https://www.youtube.com/") ||
           u.startsWith("https://music.youtube.com/")
-        ) {
+        )
           this.tabs.set(t.id, t);
-        }
       }
     } catch {
       // Ignorar si no hay permiso tabs
@@ -313,19 +311,17 @@ export class NowPlaying {
         else staleKeys.push(key);
       } else {
         const idPart = Number(key.slice(3));
-        if (!Number.isInteger(idPart) || !this.tabs.has(idPart)) {
+        if (!Number.isInteger(idPart) || !this.tabs.has(idPart))
           staleKeys.push(key);
-        } else {
-          this.np.set(key, val);
-        }
+        else this.np.set(key, val);
       }
     }
     return staleKeys;
   }
   applyChanges(changes) {
-    let npChanged = false;
-    let needSync = false;
-    let dataChanged = false;
+    let npChanged = false,
+      needSync = false,
+      dataChanged = false;
     const updates = {};
     for (const [key, change] of Object.entries(changes)) {
       if (key.startsWith("np_")) {
@@ -334,12 +330,9 @@ export class NowPlaying {
           if (
             change.newValue.tabId != null &&
             !this.tabs.has(change.newValue.tabId)
-          ) {
+          )
             needSync = true;
-          }
-        } else {
-          this.np.delete(key);
-        }
+        } else this.np.delete(key);
         npChanged = true;
       } else if (STORE_KEYS.includes(key)) {
         updates[key] = change.newValue || [];
