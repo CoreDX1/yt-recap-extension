@@ -3742,7 +3742,7 @@ els.exportBtn.addEventListener("click", async () => {
       els.exportBtn.textContent = p;
     });
     downloadBlob(blob, `youtube-recap-${toDateKey(new Date())}.zip`);
-    toast("✓ ZIP exportado con datos, tarjeta PNG e imágenes.");
+    toast("✓ ZIP exportado (datos + tarjeta PNG).");
   } catch (err) {
     toast(`Error al exportar: ${err.message}`, true);
   } finally {

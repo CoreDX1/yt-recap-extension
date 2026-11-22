@@ -725,7 +725,7 @@ dom.exportBtn.addEventListener("click", async () => {
       (p) => (dom.exportBtn.textContent = p),
     );
     downloadBlob(blob, `youtube-recap-${toDateKey(new Date())}.zip`);
-    showStatus("✓ ZIP exportado con datos, tarjeta PNG e imágenes.");
+    showStatus("✓ ZIP exportado (datos + tarjeta PNG).");
   } catch (err) {
     showStatus(`Error al exportar: ${err.message}`, true);
   } finally {

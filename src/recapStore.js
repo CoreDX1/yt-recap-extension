@@ -1,5 +1,4 @@
 // src/recapStore.js
-
 import {
   computeIsMusicFlag,
   sanitizeFileSlug,
@@ -41,7 +40,6 @@ export function migrateMusicFlags(data) {
   let changed = false;
   const byVideo = new Map();
   const byTrack = new Map();
-
   for (const it of data.history) {
     const flag =
       it.source === "yt_music" ||
@@ -117,11 +115,13 @@ export async function exportPngCard(cardData, btn) {
   }
 }
 
-export async function buildExportZip(store, cardData, onProgress) {
+// opts.includeImages === true → descarga y empaqueta las miniaturas (comportamiento viejo).
+// Por defecto NO se descarga ninguna imagen: el ZIP lleva solo JSON + tarjeta PNG.
+export async function buildExportZip(store, cardData, onProgress, opts = {}) {
+  const includeImages = opts.includeImages === true;
   const imageTasks = [];
   const seenUrls = new Set();
   const usedNames = new Set();
-
   const queueImage = (url, folder, label) => {
     if (!url?.startsWith("http") || seenUrls.has(url)) return;
     seenUrls.add(url);
@@ -133,27 +133,28 @@ export async function buildExportZip(store, cardData, onProgress) {
     imageTasks.push({ url, folder, slug: unique });
   };
 
-  store.history.forEach((it) =>
-    queueImage(it.artwork, "imagenes/portadas", it.videoId || it.title),
-  );
-  store.channelVisits.forEach((ch) =>
-    queueImage(ch.avatar, "imagenes/canales", ch.name || ch.channelKey),
-  );
-  store.interactions.forEach((it) =>
-    queueImage(
-      it.artwork,
-      it.type === "subscribe" ? "imagenes/canales" : "imagenes/portadas",
-      it.title,
-    ),
-  );
-  store.skips.forEach((sk) =>
-    queueImage(sk.artwork, "imagenes/portadas", sk.videoId || sk.title),
-  );
+  if (includeImages) {
+    store.history.forEach((it) =>
+      queueImage(it.artwork, "imagenes/portadas", it.videoId || it.title),
+    );
+    store.channelVisits.forEach((ch) =>
+      queueImage(ch.avatar, "imagenes/canales", ch.name || ch.channelKey),
+    );
+    store.interactions.forEach((it) =>
+      queueImage(
+        it.artwork,
+        it.type === "subscribe" ? "imagenes/canales" : "imagenes/portadas",
+        it.title,
+      ),
+    );
+    store.skips.forEach((sk) =>
+      queueImage(sk.artwork, "imagenes/portadas", sk.videoId || sk.title),
+    );
+  }
 
   const zipFiles = [];
   const imageMap = {};
   let done = 0;
-
   for (let i = 0; i < imageTasks.length; i += 6) {
     await Promise.all(
       imageTasks.slice(i, i + 6).map(async (task) => {
@@ -174,7 +175,6 @@ export async function buildExportZip(store, cardData, onProgress) {
       }),
     );
   }
-
   if (cardData) {
     const cardBlob = await renderRecapPngBlob(cardData);
     if (cardBlob) {
@@ -184,7 +184,6 @@ export async function buildExportZip(store, cardData, onProgress) {
       });
     }
   }
-
   const payload = { exportedAt: new Date().toISOString(), ...store, imageMap };
   zipFiles.unshift({
     name: "recap-backup.json",
@@ -224,16 +223,13 @@ export async function enrichImported(store, onProgress) {
   store.history.forEach(push);
   store.skips.forEach(push);
   store.interactions.forEach((it) => it.type === "like" && push(it));
-
   if (candidates.length === 0) {
     return { updated: 0, consulted: 0, remaining: 0, none: true };
   }
-
   const batch = candidates.slice(0, ENRICH_MAX_PER_RUN);
   const remaining = candidates.length - batch.length;
   const results = new Map();
   let done = 0;
-
   for (let i = 0; i < batch.length; i += ENRICH_CONCURRENCY) {
     await Promise.all(
       batch.slice(i, i + ENRICH_CONCURRENCY).map(async (vid) => {
@@ -259,7 +255,6 @@ export async function enrichImported(store, onProgress) {
       }),
     );
   }
-
   let updated = 0;
   const apply = (it) => {
     if (!it || it.source !== "youtube" || !it.videoId) return;
@@ -282,7 +277,6 @@ export async function enrichImported(store, onProgress) {
   store.history.forEach(apply);
   store.skips.forEach(apply);
   store.interactions.forEach((it) => it.type === "like" && apply(it));
-
   return { updated, consulted: batch.length, remaining, none: false };
 }
 
@@ -291,7 +285,6 @@ export class NowPlaying {
     this.np = new Map();
     this.tabs = new Map();
   }
-
   async sync() {
     try {
       const allTabs = await chrome.tabs.query({});
@@ -309,7 +302,6 @@ export class NowPlaying {
       // Ignorar si no hay permiso tabs
     }
   }
-
   loadInitial(all) {
     this.np.clear();
     const staleKeys = [];
@@ -330,7 +322,6 @@ export class NowPlaying {
     }
     return staleKeys;
   }
-
   applyChanges(changes) {
     let npChanged = false;
     let needSync = false;
@@ -357,12 +348,10 @@ export class NowPlaying {
     }
     return { npChanged, needSync, dataChanged, updates };
   }
-
   removeTab(tabId) {
     this.tabs.delete(tabId);
     this.np.delete(`np_${tabId}`);
   }
-
   select(pinnedId) {
     const now = Date.now();
     const candidates = [...this.np.values()].filter((v) => {
