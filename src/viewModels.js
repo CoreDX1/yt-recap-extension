@@ -585,13 +585,18 @@ export function calendarHeroVM(plays, inter, searches, year) {
   let yearPlays = 0;
   const monthSec = new Array(12).fill(0);
   const dayAny = new Set();
+  const daySec = new Map();
+  const dayPlays = new Map();
   for (const p of plays) {
     const d = new Date(p.timestamp);
     if (d.getFullYear() !== year) continue;
     yearSeconds += p.seconds || 0;
     yearPlays += 1;
     monthSec[d.getMonth()] += p.seconds || 0;
-    dayAny.add(toDateKey(d));
+    const k = toDateKey(d);
+    dayAny.add(k);
+    daySec.set(k, (daySec.get(k) || 0) + (p.seconds || 0));
+    dayPlays.set(k, (dayPlays.get(k) || 0) + 1);
   }
   for (const it of inter) {
     const d = new Date(it.timestamp);
@@ -624,12 +629,32 @@ export function calendarHeroVM(plays, inter, searches, year) {
           index: bestIdx,
         }
       : null;
+  let recordKey = null,
+    recordSec = 0;
+  for (const [k, s] of daySec)
+    if (s > recordSec) {
+      recordSec = s;
+      recordKey = k;
+    }
+  const recordDay = recordKey
+    ? {
+        key: recordKey,
+        seconds: recordSec,
+        plays: dayPlays.get(recordKey) || 0,
+        label: new Intl.DateTimeFormat("es-AR", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+        }).format(new Date(`${recordKey}T00:00:00`)),
+      }
+    : null;
   return {
     yearSeconds,
     yearPlays,
     activeDays: dayAny.size,
     maxStreak,
     bestMonth,
+    recordDay,
   };
 }
 
@@ -976,17 +1001,45 @@ export function yearHeatVM(plays, year) {
     const k = toDateKey(d);
     byDay.set(k, (byDay.get(k) || 0) + (p.seconds || 0));
   }
+  let maxSec = 0,
+    recordKey = null;
+  for (const [k, s] of byDay)
+    if (s > maxSec) {
+      maxSec = s;
+      recordKey = k;
+    }
   const cells = [];
+  const monthLabels = [];
   for (let i = 0; i < startPad; i++) cells.push(null);
-  for (let d = new Date(jan1); d <= dec31; d.setDate(d.getDate() + 1)) {
-    const sec = byDay.get(toDateKey(d)) || 0;
-    const level =
-      sec >= 7200 ? 4 : sec >= 2700 ? 3 : sec >= 900 ? 2 : sec > 0 ? 1 : 0;
-    cells.push({ key: toDateKey(d), level });
+  let idx = startPad;
+  const shortFmt = new Intl.DateTimeFormat("es-AR", { month: "short" });
+  for (let m = 0; m < 12; m++) {
+    monthLabels.push({
+      index: m,
+      col: Math.floor(idx / 7) + 1,
+      short: shortFmt.format(new Date(year, m, 1)).replace(".", ""),
+    });
+    const days = new Date(year, m + 1, 0).getDate();
+    for (let d = 1; d <= days; d++) {
+      const key = toDateKey(new Date(year, m, d));
+      const sec = byDay.get(key) || 0;
+      const level =
+        sec >= 7200 ? 4 : sec >= 2700 ? 3 : sec >= 900 ? 2 : sec > 0 ? 1 : 0;
+      const relLevel =
+        sec > 0
+          ? Math.max(1, Math.min(4, Math.ceil((sec / (maxSec || 1)) * 4)))
+          : 0;
+      cells.push({ key, sec, level, relLevel });
+      idx += 1;
+    }
   }
   return {
     cells,
     startPad,
+    maxSec,
+    recordKey,
+    monthLabels,
+    activeDays: byDay.size,
     total: [...byDay.values()].reduce((a, b) => a + b, 0),
   };
 }

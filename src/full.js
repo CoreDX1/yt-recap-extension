@@ -115,9 +115,19 @@ const calUi = {
   calMonth: new Date().getMonth(),
   selectedDateKey: toDateKey(new Date()),
   calDayMode: "all",
+  calScale:
+    localStorage.getItem("recapCalScale") === "absolute"
+      ? "absolute"
+      : "relative",
+  calLevelFilter: null,
+  calRangeAnchor: null,
+  calRangeEnd: null,
+  calWeekOpen: null,
+  calYrZoom: Number(localStorage.getItem("recapCalYrZoom") || 12) || 12,
   monthTopVideoIds: [],
   monthCardData: null,
 };
+
 let domCal = null;
 
 const els = {
@@ -395,33 +405,27 @@ function computeSigs() {
   let vi = 0;
   for (const v of visits) vi = (vi * 31 + hashStr(v.id)) | 0;
   let struct = `${state.scope}|${state.route}|${state.detail || ""}|${state.period}|${state.peopleSort}|${state.peopleMinSec}|${state.peopleQuery}|${state.likesTab}|${state.hoursMode}|${state.showGhost}|${plays.length}|${sh}|${inter.length}|${ih}|${searches.length}|${se}|${visits.length}|${vi}`;
+
   if (state.route === "calendar") {
     const buckets = new Map();
-    const touch = (k) => {
-      if (!buckets.has(k)) buckets.set(k, { sec: 0 });
-    };
     for (const p of allPlays()) {
       const k = toDateKey(new Date(p.timestamp));
-      const b = buckets.get(k) || { sec: 0 };
-      b.sec += p.seconds || 0;
-      buckets.set(k, b);
+      buckets.set(k, (buckets.get(k) || 0) + (p.seconds || 0));
     }
+    const touch = (k) => {
+      if (!buckets.has(k)) buckets.set(k, 0);
+    };
     for (const it of metaAll(store.interactions))
       touch(toDateKey(new Date(it.timestamp)));
     for (const s of metaAll(store.searches))
       touch(toDateKey(new Date(s.timestamp)));
     let hh = 0;
     for (const k of [...buckets.keys()].sort()) {
-      const sec = buckets.get(k).sec;
-      hh =
-        (hh * 31 +
-          hashStr(
-            `${k}:${sec >= 7200 ? 4 : sec >= 2700 ? 3 : sec >= 900 ? 2 : 1}`,
-          )) |
-        0;
+      hh = (hh * 31 + hashStr(`${k}:${Math.round(buckets.get(k) / 60)}`)) | 0;
     }
-    struct += `|cal${hh}|${calUi.calYear}|${calUi.calMonth}|${calUi.calViewMode}|${calUi.selectedDateKey}|${calUi.calDayMode}|${calUi.calSearchQuery}`;
+    struct += `|cal${hh}|${calUi.calYear}|${calUi.calMonth}|${calUi.calViewMode}|${calUi.selectedDateKey}|${calUi.calDayMode}|${calUi.calSearchQuery}|${calUi.calScale}|${calUi.calLevelFilter ?? "x"}|${calUi.calRangeAnchor || ""}|${calUi.calRangeEnd || ""}|${calUi.calWeekOpen ?? "x"}|${calUi.calYrZoom}`;
   }
+
   let totalSeconds = 0,
     loops = 0;
   const hours = new Array(24).fill(0);
@@ -1173,33 +1177,42 @@ function heroVisualCalendar() {
   const v = el("button", "hero-visual hv-heat");
   v.type = "button";
   const cols = Math.ceil(heat.cells.length / 7);
-  const size = 7,
+  const size = 8,
     gap = 2,
-    w = cols * (size + gap),
-    h = 7 * (size + gap);
+    labelH = 11;
+  const w = cols * (size + gap),
+    h = 7 * (size + gap) + labelH;
   const colors = [
-    "var(--surface-inset)",
-    "var(--heat-1)",
-    "var(--heat-2)",
-    "var(--heat-3)",
-    "var(--heat-4)",
+    "var(--cal-0)",
+    "var(--cal-1)",
+    "var(--cal-2)",
+    "var(--cal-3)",
+    "var(--cal-4)",
   ];
   const rects = heat.cells
     .map((c, i) => {
       if (!c) return "";
       const col = Math.floor(i / 7),
         row = i % 7;
-      return `<rect x="${col * (size + gap)}" y="${row * (size + gap)}" width="${size}" height="${size}" rx="1.5" fill="${colors[c.level]}"><title>${c.key}</title></rect>`;
+      const lv = heat.maxSec > 0 ? c.relLevel : c.level;
+      return `<rect x="${col * (size + gap)}" y="${row * (size + gap) + labelH}" width="${size}" height="${size}" rx="2" fill="${colors[lv]}"><title>${c.key}</title></rect>`;
     })
     .join("");
+  const labels = heat.monthLabels
+    .map(
+      (m) =>
+        `<text x="${(m.col - 1) * (size + gap)}" y="8" fill="var(--text-faint)" font-size="7.5" font-weight="700">${m.short}</text>`,
+    )
+    .join("");
   const holder = el("div");
-  holder.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Mapa de calor del año">${rects}</svg>`;
+  holder.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Mapa de calor de ${calUi.calYear}">${labels}${rects}</svg>`;
   const cap = el("div", "hv-heat-cap");
   cap.append(
-    el("span", null, `${calUi.calYear}`),
+    el("span", null, `${calUi.calYear} · ${heat.activeDays} días`),
     el("span", null, `${formatDuration(heat.total)} · clic para vista anual`),
   );
   v.append(holder.firstChild, cap);
+  v.title = "Abrir la vista anual del calendario";
   v.addEventListener("click", () => {
     calUi.calViewMode = "year";
     syncCalModeButtons();
@@ -2135,21 +2148,19 @@ function renderExplore() {
       );
     else {
       const list = el("div", "pt");
-      hourPlays
-        .slice(0, 20)
-        .forEach((p, i) =>
-          list.append(
-            rankRow({
-              rank: i + 1,
-              thumb: p.artwork,
-              name: p.title,
-              sub: `${p.artist} · ${formatTimeEs(p.timestamp)}`,
-              tag: formatTag(p),
-              value: formatClock(p.seconds || 0),
-              href: resolveVideoUrl(p),
-            }),
-          ),
-        );
+      hourPlays.slice(0, 20).forEach((p, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: p.artwork,
+            name: p.title,
+            sub: `${p.artist} · ${formatTimeEs(p.timestamp)}`,
+            tag: formatTag(p),
+            value: formatClock(p.seconds || 0),
+            href: resolveVideoUrl(p),
+          }),
+        ),
+      );
       body.append(list);
     }
     grid.append(
@@ -2236,6 +2247,7 @@ function renderExplore() {
 function renderCalendarRoute() {
   const hero = vmCalHero();
   els.calHero.replaceChildren();
+  const rec = hero.recordDay;
   els.calHero.append(
     pageHero({
       eyebrow: `${scopeName()} · ${calUi.calYear}`,
@@ -2253,14 +2265,21 @@ function renderCalendarRoute() {
               calUi.selectedDateKey = toDateKey(
                 new Date(calUi.calYear, hero.bestMonth.index, 1),
               );
+              calUi.calRangeAnchor = null;
+              calUi.calRangeEnd = null;
+              calUi.calWeekOpen = null;
               syncCalModeButtons();
               state.sigs = computeSigs();
               renderCalendarRoute();
             }),
           ]
         : [],
-      insight:
-        hero.maxStreak > 0
+      insight: rec
+        ? {
+            icon: "trophy",
+            text: `Tu día más fuerte de ${calUi.calYear} fue <strong>${rec.label}</strong> con <strong>${formatDuration(rec.seconds)}</strong>. Racha máxima: <strong>${hero.maxStreak} días</strong>.`,
+          }
+        : hero.maxStreak > 0
           ? {
               icon: "flame",
               text: `Tu racha más larga de ${calUi.calYear} fue de <strong>${hero.maxStreak} días</strong> seguidos con actividad.`,
@@ -2293,6 +2312,7 @@ function renderCalendarRoute() {
   renderCalendarView({
     dom: domCal,
     uiState: calUi,
+    variant: "full",
     getFilteredPlays: (cd) =>
       store.history.filter((it) => matchesFilter(it, "all", scopeValue(), cd)),
     getFilteredMeta: (items, cd) =>
@@ -2750,20 +2770,18 @@ function renderPersonDetail(host, name) {
       span: 12,
     });
     const list = el("div", "pt");
-    detail.likes
-      .slice(0, 20)
-      .forEach((it, i) =>
-        list.append(
-          rankRow({
-            rank: i + 1,
-            thumb: it.artwork,
-            name: it.title,
-            sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
-            value: "Abrir ↗",
-            href: it.videoUrl,
-          }),
-        ),
-      );
+    detail.likes.slice(0, 20).forEach((it, i) =>
+      list.append(
+        rankRow({
+          rank: i + 1,
+          thumb: it.artwork,
+          name: it.title,
+          sub: `${translateCategory(it.category) || "Sin categoría"} · ${relativeTime(it.timestamp)}`,
+          value: "Abrir ↗",
+          href: it.videoUrl,
+        }),
+      ),
+    );
     p._body.append(list);
     host.append(p);
   }
@@ -2936,21 +2954,19 @@ function paintLikesBody() {
       );
     else {
       const list = el("div", "pt");
-      vm.subs
-        .slice(0, 8)
-        .forEach((it, i) =>
-          list.append(
-            rankRow({
-              rank: i + 1,
-              thumb: it.artwork,
-              round: true,
-              name: it.title,
-              sub: relativeTime(it.timestamp),
-              value: "Canal ↗",
-              href: it.channelUrl,
-            }),
-          ),
-        );
+      vm.subs.slice(0, 8).forEach((it, i) =>
+        list.append(
+          rankRow({
+            rank: i + 1,
+            thumb: it.artwork,
+            round: true,
+            name: it.title,
+            sub: relativeTime(it.timestamp),
+            value: "Canal ↗",
+            href: it.channelUrl,
+          }),
+        ),
+      );
       rail._body.append(list);
     }
     grid.append(rail);
@@ -3542,6 +3558,34 @@ function rgbToHsl(r, g, b) {
 }
 function pickAmbientArt() {
   try {
+    if (state.route === "calendar") {
+      const art = memoVM(
+        `calMonthArt:${calUi.calYear}-${calUi.calMonth}`,
+        () => {
+          const mine = allPlays().filter((p) => {
+            const d = new Date(p.timestamp);
+            return (
+              d.getFullYear() === calUi.calYear &&
+              d.getMonth() === calUi.calMonth
+            );
+          });
+          const top = aggregateTracks(mine)[0];
+          return top?.artwork || "";
+        },
+      );
+      if (art) return art;
+      const best = vmCalHero().bestMonth;
+      if (!best) return "";
+      return memoVM(`calBestArt:${calUi.calYear}-${best.index}`, () => {
+        const mine = allPlays().filter((p) => {
+          const d = new Date(p.timestamp);
+          return (
+            d.getFullYear() === calUi.calYear && d.getMonth() === best.index
+          );
+        });
+        return aggregateTracks(mine)[0]?.artwork || "";
+      });
+    }
     if (state.route === "people" && state.detail) {
       const d = isMusicScope()
         ? memoVM(`artistDetail:${state.detail}`, () =>
@@ -3627,11 +3671,13 @@ function updateAmbient() {
 // ---------- calendario ----------
 function structureCalendar() {
   const monthView = domCal.calMonthView;
+  if (monthView.querySelector(".cal-main")) return;
   const main = el("div", "cal-main"),
     rail = el("div", "cal-rail");
   const dayPanel = domCal.calDayList.closest(".cal-section");
   const topPanel = domCal.calMonthTopList.closest(".cal-section");
   const weeksPanel = domCal.calWeeksList.closest(".cal-section");
+  const calendarBox = monthView.querySelector(".calendar-box");
   for (const n of [...monthView.children]) {
     if (n === domCal.calMonthStatsBox || n === dayPanel) rail.append(n);
     else main.append(n);
@@ -3640,7 +3686,7 @@ function structureCalendar() {
   rail.prepend(domCal.calMonthStatsBox);
   main.append(
     ...[
-      monthView.querySelector(".calendar-box"),
+      calendarBox,
       topPanel,
       domCal.calMonthChannelsBox,
       domCal.calMonthCatsBox,
@@ -3651,7 +3697,7 @@ function structureCalendar() {
   );
 }
 function initCalendarTooltips() {
-  const sel = ".cal-day, .yr-cell, .wd-col";
+  const sel = ".cal-day, .yr-cell, .wd-col, .leg-box, .week-chip";
   els.calHost.addEventListener("mouseover", (e) => {
     const t = e.target.closest(sel);
     if (!t) return;
@@ -3667,6 +3713,21 @@ function initCalendarTooltips() {
     if (t?.dataset.tip) showTip(t.dataset.tip, e.clientX, e.clientY);
   });
   els.calHost.addEventListener("mouseout", (e) => {
+    if (e.target.closest(sel)) hideTip();
+  });
+  els.calHost.addEventListener("focusin", (e) => {
+    const t = e.target.closest(sel);
+    if (!t) return;
+    const title = t.getAttribute("title");
+    if (title) {
+      t.dataset.tip = title;
+      t.removeAttribute("title");
+    }
+    if (!t.dataset.tip) return;
+    const r = t.getBoundingClientRect();
+    showTip(t.dataset.tip, r.left + r.width / 2, r.bottom);
+  });
+  els.calHost.addEventListener("focusout", (e) => {
     if (e.target.closest(sel)) hideTip();
   });
 }
